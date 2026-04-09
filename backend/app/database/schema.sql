@@ -13,7 +13,7 @@ USE SCHEMA PUBLIC;
 
 -- 1. Users Table
 -- Stores the base login and identity credentials
-CREATE OR REPLACE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
     id VARCHAR(36) PRIMARY KEY,
     email VARCHAR(255) UNIQUE NOT NULL,
     full_name VARCHAR(255),
@@ -23,7 +23,7 @@ CREATE OR REPLACE TABLE users (
 
 -- 2. User Personas (Cold-start + Behavioral Refinement)
 -- Maintained separately from `users` to cleanly track the evolving behavioral models and PDF-extracted metadata.
-CREATE OR REPLACE TABLE user_personas (
+CREATE TABLE IF NOT EXISTS user_personas (
     id VARCHAR(36) PRIMARY KEY,
     user_id VARCHAR(36) NOT NULL REFERENCES users(id),
     linkedin_url VARCHAR(2000),
@@ -42,7 +42,7 @@ CREATE OR REPLACE TABLE user_personas (
 
 -- 3. Article Clusters (Deduplicated Main Entities)
 -- Represents the synthesized conceptual "story" spanning multiple raw articles (the output of Semantic Dedup DAG).
-CREATE OR REPLACE TABLE article_clusters (
+CREATE TABLE IF NOT EXISTS article_clusters (
     id VARCHAR(36) PRIMARY KEY,
     primary_title VARCHAR(500) NOT NULL,
     primary_summary TEXT,
@@ -57,7 +57,7 @@ CREATE OR REPLACE TABLE article_clusters (
 
 -- 4. Articles Raw (The Ingestion Feed)
 -- The daily raw extracted RSS feed/Reddit posts. Ties backwards to `article_clusters` once pipeline evaluates them.
-CREATE OR REPLACE TABLE articles_raw (
+CREATE TABLE IF NOT EXISTS articles_raw (
     id VARCHAR(36) PRIMARY KEY,
     cluster_id VARCHAR(36) REFERENCES article_clusters(id), -- Nullable initially, assigned during deduplication
     source_name VARCHAR(100) NOT NULL,
@@ -79,7 +79,7 @@ CREATE OR REPLACE TABLE articles_raw (
 
 -- 5. Daily Selections
 -- Traces which clusters were explicitly selected for which user on a given day to allow pipeline auditing without viewing raw HTML.
-CREATE OR REPLACE TABLE daily_selections (
+CREATE TABLE IF NOT EXISTS daily_selections (
     id VARCHAR(36) PRIMARY KEY,
     user_id VARCHAR(36) NOT NULL REFERENCES users(id),
     cluster_id VARCHAR(36) NOT NULL REFERENCES article_clusters(id),
@@ -91,7 +91,7 @@ CREATE OR REPLACE TABLE daily_selections (
 
 -- 6. Newsletters (Final User Deliverables)
 -- Contains the actual drafted text from the Writer/Editor agents, plus required HITL states and user signals.
-CREATE OR REPLACE TABLE newsletters (
+CREATE TABLE IF NOT EXISTS newsletters (
     id VARCHAR(36) PRIMARY KEY,
     user_id VARCHAR(36) NOT NULL REFERENCES users(id),
     edition_date DATE NOT NULL,
@@ -110,7 +110,7 @@ CREATE OR REPLACE TABLE newsletters (
 
 -- 7. Companies (B2B Client Definitions)
 -- Defines the client profiles for the SEO Intelligence agents mapping trends to business offerings.
-CREATE OR REPLACE TABLE companies (
+CREATE TABLE IF NOT EXISTS companies (
     id VARCHAR(36) PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     domain VARCHAR(255),
@@ -121,7 +121,7 @@ CREATE OR REPLACE TABLE companies (
 
 -- 8. Content Briefs (Generated SEO Assets)
 -- Output of the SEO Opportunity Agent processing 'SURGING' entities.
-CREATE OR REPLACE TABLE content_briefs (
+CREATE TABLE IF NOT EXISTS content_briefs (
     id VARCHAR(36) PRIMARY KEY,
     company_id VARCHAR(36) NOT NULL REFERENCES companies(id),
     cluster_id VARCHAR(36) NOT NULL REFERENCES article_clusters(id),

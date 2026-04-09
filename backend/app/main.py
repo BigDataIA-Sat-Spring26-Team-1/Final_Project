@@ -12,6 +12,7 @@ from fastapi import FastAPI, Depends, HTTPException, Request
 
 from app.core.errors import ErrorResponse
 from app.core.config import Settings, get_settings
+from app.api import personas, ingestion, deduplication
 from app.core.logging_conf import setup_logging, get_logger
 from app.db.snowflake import get_db_connection, sync_database_schema
 
@@ -103,9 +104,9 @@ async def global_exception_handler(request: Request, exc: Exception):
         content=ErrorResponse(message="Internal server error").model_dump()
     )
 
-from app.api import personas, ingestion
 app.include_router(personas.router, prefix="/api/v1/personas", tags=["Personas"])
 app.include_router(ingestion.router, prefix="/api/v1/ingestion", tags=["Ingestion Hub"])
+app.include_router(deduplication.router, prefix="/api/v1/deduplication", tags=["Deduplication"])
 
 @app.get("/api/v1/health", tags=["System"])
 async def health_check(
