@@ -133,3 +133,23 @@ class UserPersonaUpdate(BaseModel):
     seniority: Optional[str] = None
     bio_summary: Optional[str] = None
     explicit_category_weights: Dict[str, float]
+
+# --- Ingestion Models ---
+
+class RawArticleMetadata(BaseModel):
+    source_name: str
+    source_url: str
+    title: str
+    url: str
+    summary: Optional[str] = None
+    published_at: str
+    author: Optional[str] = "Unknown"
+    tags: List[str] = []
+
+class IngestionBatchResponse(BaseModel):
+    status: str
+    total_found: int
+    saved_count: int = 0
+    start_time: str
+    end_time: str
+    processing_time_seconds: float

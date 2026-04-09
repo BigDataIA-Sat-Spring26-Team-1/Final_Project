@@ -103,8 +103,9 @@ async def global_exception_handler(request: Request, exc: Exception):
         content=ErrorResponse(message="Internal server error").model_dump()
     )
 
-from app.api import personas
+from app.api import personas, ingestion
 app.include_router(personas.router, prefix="/api/v1/personas", tags=["Personas"])
+app.include_router(ingestion.router, prefix="/api/v1/ingestion", tags=["Ingestion Hub"])
 
 @app.get("/api/v1/health", tags=["System"])
 async def health_check(
