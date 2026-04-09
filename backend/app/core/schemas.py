@@ -107,3 +107,29 @@ class PersonaExtractionResult(BaseModel):
     category_weights: CategoryWeights
     source_type: str = Field(description="Inferred classification (e.g. LinkedIn PDF, Resume)")
     extraction_latency_seconds: float = Field(default=0.0)
+
+# --- Batch & Partial Success Models ---
+
+class SinglePersonaExtractionResponse(BaseModel):
+    """Result for a single file within a batch, allowing for graceful partial failures."""
+    filename: str
+    is_success: bool
+    data: Optional[PersonaExtractionResult] = None
+    error: Optional[str] = None
+
+class BatchPersonaResponse(BaseModel):
+    """Unified response for multi-file persona ingestion."""
+    user_id: str
+    results: List[SinglePersonaExtractionResponse]
+    overall_latency_seconds: float
+
+# --- Persistence Models ---
+
+class UserPersonaUpdate(BaseModel):
+    """Input layout for the database layer specifically targeting the user_personas table."""
+    user_id: str
+    linkedin_url: Optional[str] = None
+    job_title: Optional[str] = None
+    seniority: Optional[str] = None
+    bio_summary: Optional[str] = None
+    explicit_category_weights: Dict[str, float]
