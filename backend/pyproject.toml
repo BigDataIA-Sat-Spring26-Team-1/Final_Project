@@ -10,7 +10,11 @@ dependencies = [
     "pydantic-settings>=2.2.1",
     "snowflake-connector-python>=3.10.0",
     "python-dotenv>=1.0.1",
-    "structlog>=24.1.0"
+    "structlog>=24.1.0",
+    "python-multipart>=0.0.24",
+    "litellm>=1.83.4",
+    "pdfplumber>=0.11.4",
+    "pypdf>=6.9.2"
 ]
 
 [build-system]
