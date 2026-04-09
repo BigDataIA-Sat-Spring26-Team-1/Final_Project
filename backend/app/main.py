@@ -5,6 +5,7 @@ import snowflake.connector
 from contextlib import asynccontextmanager
 
 from fastapi.responses import JSONResponse
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi import FastAPI, Depends, HTTPException, Request
@@ -14,10 +15,17 @@ from app.db.snowflake import get_db_connection
 from app.core.config import Settings, get_settings
 from app.core.logging_conf import setup_logging, get_logger
 
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi import Limiter, _rate_limit_exceeded_handler
+
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 setup_logging(get_settings().app_env)
 logger = get_logger("app")
+
+# Rate limiting configuration
+limiter = Limiter(key_func=get_remote_address)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -30,6 +38,10 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 app.add_middleware(
     CORSMiddleware,
@@ -56,6 +68,8 @@ async def request_context_middleware(request: Request, call_next):
 
     response = await call_next(request)
     response.headers["X-Request-ID"] = request_id
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
     return response
 
 # HTTP errors (404, 403, etc.) — return our standard shape instead of FastAPI's raw {"detail":...}
@@ -84,6 +98,9 @@ async def global_exception_handler(request: Request, exc: Exception):
         status_code=500,
         content=ErrorResponse(message="Internal server error").model_dump()
     )
+
+from app.api import personas
+app.include_router(personas.router, prefix="/api/v1/personas", tags=["Personas"])
 
 @app.get("/api/v1/health", tags=["System"])
 async def health_check(

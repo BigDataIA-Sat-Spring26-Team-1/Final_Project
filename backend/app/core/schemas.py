@@ -80,3 +80,30 @@ class NewsletterResponse(NewsletterBase):
     edition_date: datetime
     created_at: datetime
     updated_at: datetime
+
+# --- Persona Extraction & Standardized Taxonomy Models ---
+
+class CategoryWeights(BaseModel):
+    """Explicit taxonomy weights required for strictly-typed LLM parsing."""
+    llms: float = Field(description="Weight for LLMs (0.0 to 1.0)")
+    ai_agents: float = Field(description="Weight for AI Agents (0.0 to 1.0)")
+    computer_vision: float = Field(description="Weight for Computer Vision (0.0 to 1.0)")
+    security: float = Field(description="Weight for Security (0.0 to 1.0)")
+    hardware: float = Field(description="Weight for Hardware (0.0 to 1.0)")
+    software_engineering: float = Field(description="Weight for Software Engineering (0.0 to 1.0)")
+    ai_policy: float = Field(description="Weight for AI Policy (0.0 to 1.0)")
+    general_ai: float = Field(description="Weight for General AI (0.0 to 1.0)")
+    data_engineering: float = Field(description="Weight for Data Engineering (0.0 to 1.0)")
+    startups: float = Field(description="Weight for Startups (0.0 to 1.0)")
+
+class PersonaExtractionResult(BaseModel):
+    """Output layout mapped securely from raw text via the LLM pipeline."""
+    name: str = Field(description="Full name of the user.")
+    job_title: str = Field(description="Current or most recent job title.")
+    seniority: str = Field(description="Estimated seniority level: entry, mid, senior, lead, executive.")
+    primary_interests: List[str] = Field(description="List of primary professional interests or specializations.")
+    technical_skills: List[str] = Field(description="List of hard technical skills extracted from the document.")
+    bio_summary: str = Field(description="A 2-sentence professional bio summary.")
+    category_weights: CategoryWeights
+    source_type: str = Field(description="Inferred classification (e.g. LinkedIn PDF, Resume)")
+    extraction_latency_seconds: float = Field(default=0.0)
