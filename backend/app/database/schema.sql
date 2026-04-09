@@ -68,6 +68,7 @@ CREATE OR REPLACE TABLE articles_raw (
     content_raw VARIANT, -- JSON dump of the raw unstructured payload
     extracted_full_text TEXT, -- Explicit text payload parsed via trafilatura
     source_tags VARIANT, -- Optional raw tags straight from the RSS feed provider
+    internal_category_weights VARIANT, -- AI-generated taxonomy weights for P2 article intelligence
     published_at TIMESTAMP_NTZ, -- Time defined by the content's author
     fetched_at TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP() -- Ingestion pipeline timestamp
 );

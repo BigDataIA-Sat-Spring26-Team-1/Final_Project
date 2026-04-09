@@ -11,9 +11,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi import FastAPI, Depends, HTTPException, Request
 
 from app.core.errors import ErrorResponse
-from app.db.snowflake import get_db_connection
 from app.core.config import Settings, get_settings
 from app.core.logging_conf import setup_logging, get_logger
+from app.db.snowflake import get_db_connection, sync_database_schema
 
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -30,6 +30,10 @@ limiter = Limiter(key_func=get_remote_address)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Application starting up...")
+    
+    # Auto-Sync Snowflake Schema from master schema.sql
+    sync_database_schema()
+    
     yield
     logger.info("Application shutting down...")
 
