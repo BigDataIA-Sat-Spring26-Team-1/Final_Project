@@ -15,7 +15,7 @@ from app.db.qdrant import sync_vector_collections
 from app.core.config import Settings, get_settings
 from app.core.limiter import limiter
 from app.core.logging_conf import setup_logging, get_logger
-from app.api import personas, ingestion, deduplication, trend
+from app.api import personas, ingestion, deduplication, trend, search
 from app.db.snowflake import get_db_connection, sync_database_schema
 
 from slowapi.errors import RateLimitExceeded
@@ -110,6 +110,7 @@ app.include_router(personas.router, prefix="/api/v1/personas", tags=["Personas"]
 app.include_router(ingestion.router, prefix="/api/v1/ingestion", tags=["Ingestion Hub"])
 app.include_router(deduplication.router, prefix="/api/v1/deduplication", tags=["Deduplication"])
 app.include_router(trend.router, prefix="/api/v1/trend", tags=["Trend Engine"])
+app.include_router(search.router, prefix="/api/v1/search", tags=["Retrieval"])
 
 
 @app.get("/api/v1/health", tags=["System"])

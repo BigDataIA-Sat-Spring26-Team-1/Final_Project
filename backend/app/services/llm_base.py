@@ -31,11 +31,13 @@ class BaseLLMService:
     async def get_structured_completion(
         response_model: Type[T],
         messages: List[Dict[str, str]],
-        model: str = "gpt-4o-mini",
+        model: str = None,
         temperature: float = 0.0,
     ) -> T:
         """Calls the LLM and guarantees the result matches the provided Pydantic model format."""
         settings = get_settings()
+        if not model:
+            model = settings.default_llm_model
         
         try:
             logger.info("Requesting structured LLM completion", model=model, response_shape=response_model.__name__)
@@ -73,11 +75,13 @@ class BaseLLMService:
     )
     async def get_text_completion(
         messages: List[Dict[str, str]],
-        model: str = "gpt-4o-mini",
+        model: str = None,
         temperature: float = 0.7
     ) -> str:
         """Standard text completion for freeform logic that doesn't need strict Pydantic matching."""
         settings = get_settings()
+        if not model:
+            model = settings.default_llm_model
         
         try:
             response = await acompletion(

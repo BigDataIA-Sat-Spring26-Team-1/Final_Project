@@ -2,6 +2,7 @@ import json
 import time
 import pandas as pd
 from typing import Dict, Any
+from app.core.config import get_settings
 from app.core.logging_conf import get_logger
 from snowflake.connector import SnowflakeConnection
 from snowflake.connector.pandas_tools import write_pandas
@@ -14,8 +15,7 @@ class TrendService:
     Uses bulk SQL operations for near-instant performance.
     """
 
-    BREAKING_THRESHOLD = 3
-    TRENDING_THRESHOLD = 2
+    # Removed hardcoded thresholds, now using config-driven settings
 
     @classmethod
     async def rank_daily_clusters(cls, db: SnowflakeConnection) -> Dict[str, Any]:
@@ -128,17 +128,18 @@ class TrendService:
         status = "REGULAR"
         boost = 0
 
-        if cluster_size >= cls.BREAKING_THRESHOLD:
+        settings = get_settings()
+        if cluster_size >= settings.trend_breaking_threshold:
             status = "BREAKING"
             boost += 50
-        elif cluster_size >= cls.TRENDING_THRESHOLD:
+        elif cluster_size >= settings.trend_trending_threshold:
             status = "TRENDING"
             boost += 20
 
-        if social_signal >= 500:
+        if social_signal >= settings.trend_viral_social_benchmark:
             status = "BREAKING-VIRAL" if status == "BREAKING" else "VIRAL"
             boost += 40
-        elif social_signal >= 150:
+        elif social_signal >= settings.trend_community_pick_social_benchmark:
             if status == "REGULAR":
                 status = "COMMUNITY-PICK"
             boost += 15
