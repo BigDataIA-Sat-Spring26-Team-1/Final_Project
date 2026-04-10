@@ -19,14 +19,22 @@ async def initialize_state(state: AgentState) -> Dict[str, Any]:
 async def curate_content(state: AgentState) -> Dict[str, Any]:
     """
     Step 2: Hit the built-in SearchService to get articles matching the user's tags.
-    Shared logic with the /recommendations API.
     """
     user_id = state.get("user_id")
     logger.info("Curating content for newsletter", user_id=user_id)
     
-    # We open a connection for the search call
-    db = get_db_connection()
-    recommendations = await SearchService.get_personalized_recommendations(user_id, limit=3, db=db)
+    # get_db_connection is a generator (yields), so we handle it manually here
+    db_gen = get_db_connection()
+    db = next(db_gen)
+    
+    try:
+        recommendations = await SearchService.get_personalized_recommendations(user_id, limit=3, db=db)
+    finally:
+        # Close the connection by finishing the generator
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
     
     if not recommendations:
         return {"status": "NO_ARTICLES_FOUND", "retrieved_articles": []}
