@@ -8,7 +8,6 @@ logger = get_logger("app.services.agent_base")
 class AgentState(TypedDict):
     """
     Standard state container for all CurateAI Agents.
-    Teammates: Use this as your base state. You can extend it if needed.
     """
     # Context
     user_id: str
@@ -46,7 +45,7 @@ class BaseAgentService:
 def create_base_graph() -> StateGraph:
     """
     Initializes a StateGraph with the standard AgentState.
-    Teammates (Abhinav/Rahul): Use this to start your LangGraph builds.
+    # TODO: Abhinav/Rahul - Use this to start your LangGraph builds.
     
     Example usage in your vertical:
     

@@ -3,35 +3,69 @@ from langgraph.graph import END
 from app.services.agent_base import create_base_graph, AgentState, BaseAgentService
 from app.core.logging_conf import get_logger
 
+from app.db.snowflake import get_db_connection
+from app.services.search import SearchService
+
 logger = get_logger("app.services.b2c_agent")
 
 async def initialize_state(state: AgentState) -> Dict[str, Any]:
     """
-    Step 1: Set up the initial context, validate user_id, 
-    and fetch required persona bits if not present.
+    Step 1: Set up the initial context.
+    # TODO: Abhinav - Add persona-enrichment logic here if needed.
     """
     logger.info("Initializing B2C Agent State", user_id=state.get("user_id"))
-    return {"status": "INITIALIZED"}
+    return {"status": "INITIALIZED", "messages": []}
 
 async def curate_content(state: AgentState) -> Dict[str, Any]:
     """
-    Step 2: Hit the Retrieval Router (/api/v1/search/recommendations)
-    and filter articles based on newsletter specific criteria.
+    Step 2: Hit the built-in SearchService to get articles matching the user's tags.
+    Shared logic with the /recommendations API.
     """
-    # TODO: Abhinav to implement actual search call here
-    return {"status": "RESEARCH_COMPLETE", "retrieved_articles": []}
+    user_id = state.get("user_id")
+    logger.info("Curating content for newsletter", user_id=user_id)
+    
+    # We open a connection for the search call
+    db = get_db_connection()
+    recommendations = await SearchService.get_personalized_recommendations(user_id, limit=3, db=db)
+    
+    if not recommendations:
+        return {"status": "NO_ARTICLES_FOUND", "retrieved_articles": []}
+        
+    return {
+        "retrieved_articles": recommendations.get("results", []), 
+        "search_query": recommendations.get("semantic_basis", ""),
+        "status": "RESEARCH_COMPLETE"
+    }
 
 async def generate_newsletter(state: AgentState) -> Dict[str, Any]:
     """
-    Step 3: Use LLM to synthesize the final newsletter HTML/Markdown.
+    Step 3: Take the retrieved articles and use the LLM to write a coherent briefing.
     """
-    # TODO: Abhinav to implement LLM call for writing
-    return {"generated_content": "<h1>Your Daily Briefing</h1><p>Content coming soon...</p>", "status": "SUCCESS"}
+    articles = state.get("retrieved_articles", [])
+    if not articles:
+        return {"generated_content": "No relevant news found today.", "status": "EMPTY_RESULT"}
+
+    # Human-readable prompt construction
+    article_summaries = "\n".join([f"- {a['title']} (Score: {a['score']})" for a in articles])
+    
+    prompt = f"""
+    You are the CurateAI Newsletter Editor. 
+    Create a brief, engaging daily newsletter based on these top articles:
+    {article_summaries}
+    
+    Format the output as clean HTML with an <h1> title and bullet points.
+    Keep the tone professional yet accessible.
+    """
+    
+    logger.info("Generating newsletter via LLM")
+    response = await BaseAgentService.call_llm(messages=[{"role": "user", "content": prompt}])
+    
+    return {"generated_content": response, "status": "SUCCESS"}
 
 def get_b2c_newsletter_graph():
     """
     Builds the static LangGraph for B2C Newsletters.
-    Abhinav: You can modify the connections and add new nodes (e.g., 'editor', 'fact-check') here.
+    # TODO: Abhinav - Modify the connections or add nodes (e.g., 'editor', 'fact-check') as required.
     """
     workflow = create_base_graph()
     
