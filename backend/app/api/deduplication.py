@@ -28,7 +28,7 @@ async def run_deduplication(limit: int = 1000, db: SnowflakeConnection = Depends
                 "clusters_created": 0
             }
 
-        raw_clusters = DeduplicationService.process_batch(raw_articles)
+        raw_clusters = await DeduplicationService.process_batch(raw_articles)
         stories = [DeduplicationService.synthesize_story(c) for c in raw_clusters]
         cluster_ids = ArticleRepository.create_clusters_batch(db, stories)
 

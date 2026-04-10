@@ -11,6 +11,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi import FastAPI, Depends, HTTPException, Request
 
 from app.core.errors import ErrorResponse
+from app.db.qdrant import sync_vector_collections
 from app.core.config import Settings, get_settings
 from app.core.limiter import limiter
 from app.core.logging_conf import setup_logging, get_logger
@@ -30,6 +31,7 @@ logger = get_logger("app")
 async def lifespan(app: FastAPI):
     logger.info("Application starting up...")
     sync_database_schema()
+    sync_vector_collections()
     yield
     logger.info("Application shutting down...")
 
