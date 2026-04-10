@@ -1,0 +1,82 @@
+import json
+from typing import List, Dict, Any
+from app.core.logging_conf import get_logger
+from app.db.qdrant import get_qdrant_client
+from app.services.deduplication import DeduplicationService
+from snowflake.connector import SnowflakeConnection
+
+logger = get_logger("app.services.search")
+
+class SearchService:
+    @staticmethod
+    async def get_personalized_recommendations(
+        user_id: str, 
+        limit: int, 
+        db: SnowflakeConnection
+    ) -> Dict[str, Any]:
+        """
+        Logic for retrieving personalized content for a user.
+        Shared by the API and the Agents.
+        """
+        # 1. Fetch User Weights from Snowflake
+        cur = db.cursor()
+        cur.execute("""
+            SELECT explicit_category_weights, behavioral_category_weights
+            FROM user_personas
+            WHERE user_id = %s
+        """, (user_id,))
+        row = cur.fetchone()
+        
+        if not row:
+            return None # Or raise specific error
+
+        explicit_weights = row[0]
+        behavioral_weights = row[1]
+        
+        weights = {}
+        if explicit_weights:
+            try:
+                weights.update(json.loads(explicit_weights))
+            except:
+                pass
+        if behavioral_weights:
+            try:
+                weights.update(json.loads(behavioral_weights))
+            except:
+                pass
+                
+        if not weights:
+            search_query = "latest major technology industry news"
+        else:
+            top_cats = sorted(weights.items(), key=lambda x: x[1], reverse=True)
+            search_query = " ".join([cat[0] for cat in top_cats])
+            
+        logger.info("Formulated semantic persona query", user_id=user_id, query=search_query)
+
+        # 2. Vectorize query
+        query_embeddings = await DeduplicationService.get_embeddings([search_query])
+        query_vector = query_embeddings[0].tolist()
+
+        # 3. Query Qdrant
+        q_client = get_qdrant_client()
+        response = q_client.query_points(
+            collection_name="articles",
+            query=query_vector,
+            limit=limit,
+        )
+        
+        results = []
+        for hit in response.points:
+            results.append({
+                "cluster_id": str(hit.id),
+                "score": round(hit.score, 4),
+                "title": hit.payload.get("title", ""),
+                "sources": hit.payload.get("sources", []),
+                "cluster_size": hit.payload.get("cluster_size", 1)
+            })
+            
+        return {
+            "user_id": user_id,
+            "semantic_basis": search_query,
+            "results": results
+        }

@@ -10,7 +10,23 @@ dependencies = [
     "pydantic-settings>=2.2.1",
     "snowflake-connector-python>=3.10.0",
     "python-dotenv>=1.0.1",
-    "structlog>=24.1.0"
+    "structlog>=24.1.0",
+    "python-multipart>=0.0.24",
+    "litellm>=1.83.4",
+    "pdfplumber>=0.11.4",
+    "pypdf>=6.9.2",
+    "slowapi>=0.1.9",
+    "tenacity>=9.1.4",
+    "feedparser>=6.0.12",
+    "python-dateutil>=2.9.0.post0",
+    "scikit-learn>=1.7.2",
+    "numpy>=2.2.6",
+    "trafilatura>=2.0.0",
+    "pandas>=2.3.3",
+    "pyarrow>=23.0.1",
+    "qdrant-client>=1.17.1",
+    "langgraph>=1.1.6",
+    "langchain-core>=1.2.28",
 ]
 
 [build-system]

@@ -80,3 +80,76 @@ class NewsletterResponse(NewsletterBase):
     edition_date: datetime
     created_at: datetime
     updated_at: datetime
+
+# --- Persona Extraction & Standardized Taxonomy Models ---
+
+class CategoryWeights(BaseModel):
+    """Explicit taxonomy weights required for strictly-typed LLM parsing."""
+    llms: float = Field(description="Weight for LLMs (0.0 to 1.0)")
+    ai_agents: float = Field(description="Weight for AI Agents (0.0 to 1.0)")
+    computer_vision: float = Field(description="Weight for Computer Vision (0.0 to 1.0)")
+    security: float = Field(description="Weight for Security (0.0 to 1.0)")
+    hardware: float = Field(description="Weight for Hardware (0.0 to 1.0)")
+    software_engineering: float = Field(description="Weight for Software Engineering (0.0 to 1.0)")
+    ai_policy: float = Field(description="Weight for AI Policy (0.0 to 1.0)")
+    general_ai: float = Field(description="Weight for General AI (0.0 to 1.0)")
+    data_engineering: float = Field(description="Weight for Data Engineering (0.0 to 1.0)")
+    startups: float = Field(description="Weight for Startups (0.0 to 1.0)")
+
+class PersonaExtractionResult(BaseModel):
+    """Output layout mapped securely from raw text via the LLM pipeline."""
+    name: str = Field(description="Full name of the user.")
+    job_title: str = Field(description="Current or most recent job title.")
+    seniority: str = Field(description="Estimated seniority level: entry, mid, senior, lead, executive.")
+    primary_interests: List[str] = Field(description="List of primary professional interests or specializations.")
+    technical_skills: List[str] = Field(description="List of hard technical skills extracted from the document.")
+    bio_summary: str = Field(description="A 2-sentence professional bio summary.")
+    category_weights: CategoryWeights
+    source_type: str = Field(description="Inferred classification (e.g. LinkedIn PDF, Resume)")
+    extraction_latency_seconds: float = Field(default=0.0)
+
+# --- Batch & Partial Success Models ---
+
+class SinglePersonaExtractionResponse(BaseModel):
+    """Result for a single file within a batch, allowing for graceful partial failures."""
+    filename: str
+    is_success: bool
+    data: Optional[PersonaExtractionResult] = None
+    error: Optional[str] = None
+
+class BatchPersonaResponse(BaseModel):
+    """Unified response for multi-file persona ingestion."""
+    user_id: str
+    results: List[SinglePersonaExtractionResponse]
+    overall_latency_seconds: float
+
+# --- Persistence Models ---
+
+class UserPersonaUpdate(BaseModel):
+    """Input layout for the database layer specifically targeting the user_personas table."""
+    user_id: str
+    linkedin_url: Optional[str] = None
+    job_title: Optional[str] = None
+    seniority: Optional[str] = None
+    bio_summary: Optional[str] = None
+    explicit_category_weights: Dict[str, float]
+
+# --- Ingestion Models ---
+
+class RawArticleMetadata(BaseModel):
+    source_name: str
+    source_url: str
+    title: str
+    url: str
+    summary: Optional[str] = None
+    published_at: str
+    author: Optional[str] = "Unknown"
+    tags: List[str] = []
+
+class IngestionBatchResponse(BaseModel):
+    status: str
+    total_found: int
+    saved_count: int = 0
+    start_time: str
+    end_time: str
+    processing_time_seconds: float
