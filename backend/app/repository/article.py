@@ -2,6 +2,7 @@ import json
 import uuid
 import pandas as pd
 from typing import List, Dict, Any
+
 from app.core.logging_conf import get_logger
 from snowflake.connector import SnowflakeConnection
 from snowflake.connector.pandas_tools import write_pandas
@@ -13,9 +14,7 @@ class ArticleRepository:
 
     @staticmethod
     def get_unclassified_articles(conn: SnowflakeConnection, limit: int = 50) -> List[Dict[str, Any]]:
-        """
-        Fetches articles that have been ingested but not yet classified by the P2 AI pipeline.
-        """
+        """Fetches articles that have been ingested but have no AI taxonomy applied yet."""
         query = """
         SELECT id, title, summary, extracted_full_text 
         FROM articles_raw 
@@ -33,9 +32,7 @@ class ArticleRepository:
 
     @staticmethod
     def update_article_weights(conn: SnowflakeConnection, article_id: str, weights: Dict[str, float]):
-        """
-        Updates the internal taxonomy weights for a specific article.
-        """
+        """Saves the calculated AI taxonomy weights to a specific article."""
         weights_json = json.dumps(weights)
         query = """
         UPDATE articles_raw 
@@ -46,22 +43,14 @@ class ArticleRepository:
             cursor = conn.cursor()
             cursor.execute(query, (weights_json, article_id))
             conn.commit()
-            logger.info("Updated article weights", article_id=article_id)
+            logger.debug("Updated internal AI weights", article_id=article_id)
         except Exception as e:
             logger.error("Failed to update article weights", article_id=article_id, error=str(e))
             raise
 
     @staticmethod
     def upsert_raw_articles(conn: SnowflakeConnection, articles: List[Dict[str, Any]]) -> int:
-        """Performs high-performance chunked batch MERGE into articles_raw.
-
-        Args:
-            conn: Active Snowflake connection.
-            articles: List of article dictionaries to ingest.
-
-        Returns:
-            int: Number of articles processed across all chunks.
-        """
+        """MERGEs new articles in chunks. Skips existing ones matched by URL."""
         if not articles:
             return 0
             
@@ -114,9 +103,7 @@ class ArticleRepository:
 
     @staticmethod
     def get_unclustered_articles(conn: SnowflakeConnection, limit: int = 2000) -> List[Dict[str, Any]]:
-        """
-        Fetches raw articles that have not yet been assigned to a semantic cluster.
-        """
+        """Fetches raw articles that have not yet been assigned to a semantic cluster."""
         query = """
         SELECT id, title, url, summary, source_name, published_at
         FROM articles_raw 
@@ -134,13 +121,10 @@ class ArticleRepository:
 
     @staticmethod
     def create_clusters_batch(conn: SnowflakeConnection, clusters: List[Dict[str, Any]]) -> List[str]:
-        """
-        Inserts multiple article clusters in a single round-trip.
-        """
+        """Inserts multiple newly created story clusters in a single round-trip."""
         if not clusters:
             return []
             
-        import uuid
         cursor = conn.cursor()
         ids = []
         value_templates = []
@@ -172,19 +156,14 @@ class ArticleRepository:
 
     @staticmethod
     def link_articles_to_clusters_bulk(conn: SnowflakeConnection, linkage: List[Dict[str, Any]]) -> None:
-        """Performs optimized bulk update of article cluster assignments.
-
-        Uses write_pandas to push mapping to a temporary table and then executes
-         a single server-side JOIN update for maximum performance.
-
-        Args:
-            conn: Active Snowflake connection.
-            linkage: List of linkage dicts containing 'cluster_id' and 'article_ids' list.
+        """Pushes massive amounts of cluster ID assignments into Snowflake instantly.
+        
+        Uses pandas bulk ingestion to push data to a temporary Snowflake table,
+        then binds it to the core table via a fast server-side UPDATE JOIN.
         """
         if not linkage:
             return
             
-        # Flatten the linkage data into a list of pairs
         rows = []
         for item in linkage:
             cid = item['cluster_id']
@@ -194,13 +173,9 @@ class ArticleRepository:
         df = pd.DataFrame(rows)
         cursor = conn.cursor()
         
-        # 1. Create a matching temporary table
         cursor.execute("CREATE OR REPLACE TEMPORARY TABLE linkage_tmp (ARTICLE_ID STRING, CLUSTER_ID STRING)")
-        
-        # 2. Use the specialized high-speed pandas uploader
         write_pandas(conn, df, table_name='LINKAGE_TMP', schema=conn.schema, database=conn.database)
         
-        # 3. Perform the bulk JOIN-UPDATE
         cursor.execute("""
             UPDATE articles_raw a
             SET a.cluster_id = lt.CLUSTER_ID
@@ -209,15 +184,65 @@ class ArticleRepository:
         """)
         
         conn.commit()
-        logger.info("Bulk article linkage complete", article_count=len(rows))
+        logger.info("Bulk article linkage applied", article_count=len(rows))
+
+    @staticmethod
+    def get_recent_clusters(conn: SnowflakeConnection, limit: int = 200) -> List[Dict[str, Any]]:
+        """Fetches the most recent story clusters for daily trend evaluation."""
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT id, primary_title, social_popularity_score 
+                FROM article_clusters 
+                ORDER BY created_at DESC 
+                LIMIT %s
+            """, (limit,))
+            columns = [col[0].lower() for col in cur.description]
+            return [dict(zip(columns, row)) for row in cur.fetchall()]
+        except Exception as e:
+            logger.error("Failed to fetch recent clusters", error=str(e))
+            return []
+
+    @staticmethod
+    def get_articles_in_cluster(conn: SnowflakeConnection, cluster_id: str) -> List[Dict[str, Any]]:
+        """Retrieves all connected raw articles out of a specific story cluster."""
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT id, title, internal_category_weights 
+                FROM articles_raw 
+                WHERE cluster_id = %s
+            """, (cluster_id,))
+            columns = [col[0].lower() for col in cur.description]
+            return [dict(zip(columns, row)) for row in cur.fetchall()]
+        except Exception as e:
+            logger.error("Failed to fetch articles in cluster", cluster_id=cluster_id, error=str(e))
+            return []
+
+    @staticmethod
+    def update_cluster_intelligence(conn: SnowflakeConnection, cluster_id: str, 
+                                    weights: Dict[str, float], trend_status: str, 
+                                    trend_score: float, cluster_size: int):
+        """Attaches final computed trend scores and AI category weights to a cluster."""
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                UPDATE article_clusters 
+                SET category_weights = PARSE_JSON(%s),
+                    trend_status = %s,
+                    final_trend_score = %s,
+                    cluster_size = %s
+                WHERE id = %s
+            """, (json.dumps(weights), trend_status, trend_score, cluster_size, cluster_id))
+            logger.debug("Cluster intelligence saved", cluster_id=cluster_id, status=trend_status)
+        except Exception as e:
+            logger.error("Failed to save cluster intelligence", cluster_id=cluster_id, error=str(e))
 
     @staticmethod
     def reset_pipeline_data(conn: SnowflakeConnection):
-        """
-        Wipes the database for a fresh firehose run.
-        """
+        """Truncates all intelligence tables. Primarily used for local testing."""
         cursor = conn.cursor()
         cursor.execute("TRUNCATE TABLE articles_raw")
         cursor.execute("TRUNCATE TABLE article_clusters")
         conn.commit()
-        logger.info("Snowflake pipeline data RESET successfully.")
+        logger.warning("Pipeline data truncated fully")

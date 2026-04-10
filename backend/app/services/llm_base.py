@@ -11,17 +11,14 @@ from tenacity import (
 from app.core.config import get_settings
 from app.core.logging_conf import get_logger
 
-from typing import Type, TypeVar, List, Dict, Any, Optional
+from typing import Type, TypeVar, List, Dict
 
 logger = get_logger("app.services.llm_base")
 
 T = TypeVar("T", bound=BaseModel)
 
 class BaseLLMService:
-    """
-    Unified base class for LLM interactions using LiteLLM.
-    Provides standardized methods for structured outputs and error handling.
-    """
+    """Provides a standardized gateway to LLM models with built-in retries and structured output."""
     
     @staticmethod
     @retry(
@@ -37,13 +34,11 @@ class BaseLLMService:
         model: str = "gpt-4o-mini",
         temperature: float = 0.0,
     ) -> T:
-        """
-        Executes an asynchronous LLM call with exponential backoff and forces the response into a Pydantic model.
-        """
+        """Calls the LLM and guarantees the result matches the provided Pydantic model format."""
         settings = get_settings()
         
         try:
-            logger.info("Initiating LiteLLM structured completion", model=model, response_shape=response_model.__name__)
+            logger.info("Requesting structured LLM completion", model=model, response_shape=response_model.__name__)
             
             response = await acompletion(
                 model=model,
@@ -53,17 +48,19 @@ class BaseLLMService:
                 api_key=settings.openai_api_key
             )
             
+            if not response or not hasattr(response, 'choices') or not response.choices:
+                logger.error("LLM returned an invalid response object", response=str(response))
+                raise ValueError("LLM returned no choices.")
+                
             content_str = response.choices[0].message.content
             if not content_str:
+                logger.warning("LLM response content is empty")
                 raise ValueError("LLM returned an empty response content.")
                 
             return response_model.model_validate_json(content_str)
             
         except Exception as e:
-            # We log but reraise for tenacity to catch and retry if applicable
-            logger.error("LiteLLM structured completion effort failed", 
-                         model=model, 
-                         error=str(e))
+            logger.error("Structured LLM completion failed", model=model, error=str(e), error_type=type(e).__name__)
             raise
 
     @staticmethod
@@ -79,10 +76,9 @@ class BaseLLMService:
         model: str = "gpt-4o-mini",
         temperature: float = 0.7
     ) -> str:
-        """
-        Standard text-based completion for non-structured tasks.
-        """
+        """Standard text completion for freeform logic that doesn't need strict Pydantic matching."""
         settings = get_settings()
+        
         try:
             response = await acompletion(
                 model=model,
@@ -92,5 +88,5 @@ class BaseLLMService:
             )
             return response.choices[0].message.content or ""
         except Exception as e:
-            logger.error("LiteLLM text completion failure", error=str(e))
-            raise RuntimeError(f"LLM Text Error: {str(e)}")
+            logger.error("LLM text completion failed", error=str(e))
+            raise RuntimeError(f"LLM Error: {str(e)}")
