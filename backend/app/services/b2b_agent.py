@@ -9,35 +9,22 @@ logger = get_logger("app.services.b2b_agent")
 
 
 async def initialize_state(state: AgentState) -> Dict[str, Any]:
-    """
-    Step 1: Set up the Enterprise context (Industry, Competitors).
-    """
+    
     logger.info("Initializing B2B Agent State", user_id=state.get("user_id"))
     return {"status": "INITIALIZED"}
 
 
 def get_b2b_report_graph():
-    """
-    Builds the static LangGraph for B2B Intelligence Reports.
-    """
     workflow = create_base_graph()
     workflow.add_node("init", initialize_state)
+    workflow.add_node("intel_extract", extract_intelligence)
     workflow.set_entry_point("init")
-    workflow.add_edge("init", END)
+    workflow.add_edge("init", "intel_extract")
+    workflow.add_edge("intel_extract", END)
     return workflow.compile()
 
 async def extract_intelligence(state: AgentState) -> Dict[str, Any]:
-    """
-    Step 2: Deep search for social signals and cluster weights.
-    Retrieves cross-cluster business intelligence using SearchService (limit=10
-    for broader coverage than B2C), then applies a 3-signal SEO opportunity
-    scoring algorithm:
-    - Relevance (40%): vector similarity score from Qdrant
-    - Velocity (30%): cluster_size as a proxy for cross-source coverage
-    - Competition Gap (30%): inverse cluster_size — fewer sources = bigger gap
-    Each article is tagged with an urgency tier:
-    HIDDEN GEM (>=85) | ACT NOW (>=70) | MONITOR (>=50) | SKIP (<50)
-    """
+    
     user_id = state.get("user_id")
     logger.info("Extracting B2B intelligence", user_id=user_id)
 
