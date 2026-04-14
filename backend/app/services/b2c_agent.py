@@ -5,16 +5,33 @@ from app.core.logging_conf import get_logger
 
 from app.db.snowflake import get_db_connection
 from app.services.search import SearchService
+from app.repository.persona import PersonaRepository
 
 logger = get_logger("app.services.b2c_agent")
 
 async def initialize_state(state: AgentState) -> Dict[str, Any]:
     """
     Step 1: Set up the initial context.
-    # TODO: Abhinav - Add persona-enrichment logic here if needed.
+    Fetches the explicit and behavioral persona details from the DB.
     """
-    logger.info("Initializing B2C Agent State", user_id=state.get("user_id"))
-    return {"status": "INITIALIZED", "messages": []}
+    user_id = state.get("user_id")
+    logger.info("Initializing B2C Agent State", user_id=user_id)
+    
+    db_gen = get_db_connection()
+    db = next(db_gen)
+    try:
+        persona_data = PersonaRepository.get_persona(db, user_id)
+    finally:
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
+            
+    return {
+        "status": "INITIALIZED", 
+        "messages": [],
+        "user_persona": persona_data if persona_data else {}
+    }
 
 async def curate_content(state: AgentState) -> Dict[str, Any]:
     """
@@ -39,8 +56,9 @@ async def curate_content(state: AgentState) -> Dict[str, Any]:
     if not recommendations:
         return {"status": "NO_ARTICLES_FOUND", "retrieved_articles": []}
         
+    # Format the payload returned from the Snowflake/Qdrant SearchService
     return {
-        "retrieved_articles": recommendations.get("results", []), 
+        "retrieved_articles": recommendations.get("result", []), 
         "search_query": recommendations.get("semantic_basis", ""),
         "status": "RESEARCH_COMPLETE"
     }
