@@ -102,10 +102,41 @@ async def generate_newsletter(state: AgentState) -> Dict[str, Any]:
     
     return {"generated_content": response, "status": "SUCCESS"}
 
+async def editor_review(state: AgentState) -> Dict[str, Any]:
+    """
+    Step 4: Review the draft against the retrieved articles for hallucinations.
+    """
+    draft = state.get("generated_content", "")
+    articles = state.get("retrieved_articles", [])
+    
+    prompt = f"""
+    You are the CurateAI Senior Editor. Your job is strict fact-checking.
+    Verify this draft does NOT invent any facts, numbers, or claims that are not present in these sources.
+    
+    Sources: {articles}
+    
+    Draft: {draft}
+    
+    Respond strictly with "APPROVED" if the draft is clean and factually accurate.
+    If it hallucinates or invents information, respond with "REJECT:" followed by the specific reason.
+    """
+    
+    logger.info("Editor reviewing draft for hallucinations")
+    response = await BaseAgentService.call_llm(messages=[{"role": "user", "content": prompt}])
+    
+    if "REJECT" in response.upper():
+        logger.warning("Draft rejected by editor", reason=response)
+        return {
+            "status": "REVISION_NEEDED", 
+            "messages": [{"role": "system", "content": f"Editor Feedback: {response}"}]
+        }
+        
+    return {"status": "APPROVED"}
+
 def get_b2c_newsletter_graph():
     """
     Builds the static LangGraph for B2C Newsletters.
-    # TODO: Abhinav - Modify the connections or add nodes (e.g., 'editor', 'fact-check') as required.
+    # TODO: Abhinav - Complete Task 5 and 6 (Add conditional logic and editor_revise node).
     """
     workflow = create_base_graph()
     
@@ -113,11 +144,13 @@ def get_b2c_newsletter_graph():
     workflow.add_node("init", initialize_state)
     workflow.add_node("curate", curate_content)
     workflow.add_node("write", generate_newsletter)
+    workflow.add_node("editor_review", editor_review)
     
     # 2. Define Edges
     workflow.set_entry_point("init")
     workflow.add_edge("init", "curate")
     workflow.add_edge("curate", "write")
-    workflow.add_edge("write", END)
+    workflow.add_edge("write", "editor_review")
+    workflow.add_edge("editor_review", END)
     
     return workflow.compile()
