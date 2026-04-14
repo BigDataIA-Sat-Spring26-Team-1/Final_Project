@@ -64,3 +64,35 @@ class PersonaRepository:
         except Exception as e:
             logger.error("Snowflake UPSERT failure", user_id=data.user_id, error=str(e))
             raise RuntimeError(f"Database sync failed: {str(e)}")
+
+    @staticmethod
+    def get_persona(conn: SnowflakeConnection, user_id: str) -> Optional[dict]:
+        """
+        Fetches the user's explicit and behavioral persona details from Snowflake.
+        """
+        query = """
+        SELECT job_title, seniority, bio_summary, explicit_category_weights, behavioral_category_weights
+        FROM user_personas
+        WHERE user_id = %s
+        """
+        try:
+            cursor = conn.cursor()
+            cursor.execute(query, (user_id,))
+            result = cursor.fetchone()
+            
+            if result:
+                persona_data = {
+                    "job_title": result[0],
+                    "seniority": result[1],
+                    "bio_summary": result[2],
+                    "explicit_category_weights": json.loads(result[3]) if result[3] else {},
+                    "behavioral_category_weights": json.loads(result[4]) if result[4] else {}
+                }
+                logger.info("Successfully fetched persona", user_id=user_id)
+                return persona_data
+            
+            logger.warning("No persona found for user", user_id=user_id)
+            return None
+        except Exception as e:
+            logger.error("Failed to fetch persona", user_id=user_id, error=str(e))
+            return None
