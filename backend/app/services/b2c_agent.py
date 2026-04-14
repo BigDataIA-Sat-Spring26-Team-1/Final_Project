@@ -58,7 +58,7 @@ async def curate_content(state: AgentState) -> Dict[str, Any]:
         
     # Format the payload returned from the Snowflake/Qdrant SearchService
     return {
-        "retrieved_articles": recommendations.get("result", []), 
+        "retrieved_articles": recommendations.get("results", []), 
         "search_query": recommendations.get("semantic_basis", ""),
         "status": "RESEARCH_COMPLETE"
     }
