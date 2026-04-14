@@ -18,9 +18,11 @@ def get_b2b_report_graph():
     workflow = create_base_graph()
     workflow.add_node("init", initialize_state)
     workflow.add_node("intel_extract", extract_intelligence)
+    workflow.add_node("report_gen", generate_report)
     workflow.set_entry_point("init")
     workflow.add_edge("init", "intel_extract")
-    workflow.add_edge("intel_extract", END)
+    workflow.add_edge("intel_extract", "report_gen")
+    workflow.add_edge("report_gen", END)
     return workflow.compile()
 
 async def extract_intelligence(state: AgentState) -> Dict[str, Any]:
@@ -80,3 +82,62 @@ async def extract_intelligence(state: AgentState) -> Dict[str, Any]:
         "search_query": recommendations.get("semantic_basis", ""),
         "status": "RESEARCH_COMPLETE",
     }
+
+async def generate_report(state: AgentState) -> Dict[str, Any]:
+ 
+    articles = state.get("retrieved_articles", [])
+    if not articles:
+        return {
+            "generated_content": (
+                "# Enterprise Intelligence Report\n\n"
+                "No relevant intelligence signals found for this profile."
+            ),
+            "status": "EMPTY_RESULT",
+        }
+
+    intel_lines = []
+    for a in articles:
+        tier = a.get("urgency_tier", "MONITOR")
+        score = a.get("opportunity_score", 0)
+        sources_count = a.get("cluster_size", 1)
+        intel_lines.append(
+            f"- [{tier}] **{a['title']}** | Score: {score} | Coverage: {sources_count} source(s)"
+        )
+
+    intel_summary = "\n".join(intel_lines)
+
+    prompt = f"""You are the CurateAI B2B Intelligence Analyst.
+
+Generate a concise executive research briefing in Markdown for a corporate client based
+on the following scored intelligence signals:
+
+{intel_summary}
+
+Structure the report exactly as follows:
+
+# Executive Intelligence Briefing
+
+## Key Opportunity Signals
+Summarize the top HIDDEN GEM and ACT NOW topics with strategic context. If none exist,
+note that all signals are at MONITOR level.
+
+## Market Trends Overview
+Identify cross-topic patterns and emerging themes from the full signal set.
+
+## Recommended Actions
+List 3-5 concrete, prioritized next steps the client should take based on the
+intelligence above.
+
+Keep the tone data-driven, concise, and professional. Do not invent facts not present in
+the signal data."""
+
+    logger.info(
+        "Generating B2B report via LLM",
+        user_id=state.get("user_id"),
+        article_count=len(articles),
+    )
+
+    response = await BaseAgentService.call_llm(
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return {"generated_content": response, "status": "SUCCESS"}
