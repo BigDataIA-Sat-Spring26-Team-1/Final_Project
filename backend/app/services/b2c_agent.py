@@ -66,24 +66,38 @@ async def curate_content(state: AgentState) -> Dict[str, Any]:
 async def generate_newsletter(state: AgentState) -> Dict[str, Any]:
     """
     Step 3: Take the retrieved articles and use the LLM to write a coherent briefing.
+    Dynamically adheres to the user persona fetched in Step 1.
     """
     articles = state.get("retrieved_articles", [])
     if not articles:
         return {"generated_content": "No relevant news found today.", "status": "EMPTY_RESULT"}
 
-    # Human-readable prompt construction
-    article_summaries = "\n".join([f"- {a['title']} (Score: {a['score']})" for a in articles])
+    # Dynamically extract persona parameters context
+    user_persona = state.get("user_persona", {})
+    job_title = user_persona.get("job_title", "General Technology Enthusiast")
+    seniority = user_persona.get("seniority", "Mid-level")
+    bio_summary = user_persona.get("bio_summary", "A reader interested in tech.")
+
+    article_summaries = "\n".join([f"- {a['title']} (Score: {a['score']}, Depth: {a.get('cluster_size', 1)} sources)" for a in articles])
     
     prompt = f"""
-    You are the CurateAI Newsletter Editor. 
-    Create a brief, engaging daily newsletter based on these top articles:
+    You are the CurateAI Newsletter Editor.
+    
+    Target Audience Profile:
+    - Job Role: {job_title} ({seniority})
+    - Background: {bio_summary}
+    
+    Create a highly personalized, engaging daily newsletter specifically tailored for the audience above, based on these top articles:
     {article_summaries}
     
-    Format the output as clean HTML with an <h1> title and bullet points.
-    Keep the tone professional yet accessible.
+    Formatting Requirements:
+    - Return clean, semantic HTML format (no markdown formatting blocks).
+    - Include a catchy <h1> headline.
+    - Write a brief introductory paragraph connecting the news to their role.
+    - Present the core news as scannable bullet points mapping back to the sources.
     """
     
-    logger.info("Generating newsletter via LLM")
+    logger.info("Generating newsletter via LLM with User Persona", job_title=job_title)
     response = await BaseAgentService.call_llm(messages=[{"role": "user", "content": prompt}])
     
     return {"generated_content": response, "status": "SUCCESS"}
