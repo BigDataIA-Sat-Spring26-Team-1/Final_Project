@@ -15,7 +15,12 @@ async def generate_b2b_report(
     request: Request,
     payload: B2BReportRequest,
 ):
+    """Triggers the B2B Intelligence Agent to generate an enterprise research report.
 
+    Retrieves relevant business intelligence articles for the corporate client,
+    applies SEO opportunity scoring (Relevance / Velocity / Competition Gap),
+    and synthesizes a structured Markdown executive briefing.
+    """
     logger.info("B2B report generation requested", user_id=payload.user_id)
 
     graph = get_b2b_report_graph()
