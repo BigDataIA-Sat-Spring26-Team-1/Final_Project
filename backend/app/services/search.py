@@ -32,19 +32,29 @@ class SearchService:
 
         explicit_weights = row[0]
         behavioral_weights = row[1]
-        
-        weights = {}
+
+        explicit_w: dict = {}
+        behavioral_w: dict = {}
         if explicit_weights:
             try:
-                weights.update(json.loads(explicit_weights))
-            except:
+                explicit_w = json.loads(explicit_weights)
+            except (json.JSONDecodeError, TypeError):
                 pass
         if behavioral_weights:
             try:
-                weights.update(json.loads(behavioral_weights))
-            except:
+                behavioral_w = json.loads(behavioral_weights)
+            except (json.JSONDecodeError, TypeError):
                 pass
-                
+
+        # P4 blend: refined = explicit × 0.8 + behavioral × 0.2
+        # Categories below 0.05 are pruned as noise.
+        all_categories = set(explicit_w.keys()) | set(behavioral_w.keys())
+        weights = {
+            cat: round(explicit_w.get(cat, 0.0) * 0.8 + behavioral_w.get(cat, 0.0) * 0.2, 4)
+            for cat in all_categories
+        }
+        weights = {cat: w for cat, w in weights.items() if w >= 0.05}
+
         if not weights:
             search_query = "latest major technology industry news"
         else:
