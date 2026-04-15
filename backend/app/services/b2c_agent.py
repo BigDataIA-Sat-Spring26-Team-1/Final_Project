@@ -133,34 +133,6 @@ async def editor_review(state: AgentState) -> Dict[str, Any]:
         
     return {"status": "APPROVED"}
 
-async def editor_revise(state: AgentState) -> Dict[str, Any]:
-    """
-    Step 5: Rewrite the draft based on Editor's rejection notes.
-    """
-    draft = state.get("generated_content", "")
-    
-    # Grab the last message (which automatically contains the Editor's feedback)
-    messages = state.get("messages", [])
-    rejection_notes = messages[-1]["content"] if messages else "Review notes missing."
-    
-    prompt = f"""
-    You are the CurateAI Senior Copy Editor.
-
-    The following newsletter draft was flagged for hallucinations/errors.
-    Here is the specific feedback you must address:
-    {rejection_notes}
-    
-    Original Draft: 
-    {draft}
-    
-    Rewrite this draft entirely to fix the noted issues. Output only the final updated HTML, with no conversational filler.
-    """
-    
-    logger.info("Revising draft based on editor feedback")
-    response = await BaseAgentService.call_llm(messages=[{"role": "user", "content": prompt}])
-    
-    return {"generated_content": response, "status": "REVISED"}
-
 def get_b2c_newsletter_graph():
     """
     Builds the static LangGraph for B2C Newsletters.
