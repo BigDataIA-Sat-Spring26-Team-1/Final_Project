@@ -133,10 +133,46 @@ async def editor_review(state: AgentState) -> Dict[str, Any]:
         
     return {"status": "APPROVED"}
 
+async def editor_revise(state: AgentState) -> Dict[str, Any]:
+    """
+    Step 5: Rewrite the draft based on Editor's rejection notes.
+    """
+    draft = state.get("generated_content", "")
+    
+    # Grab the last message (which automatically contains the Editor's feedback)
+    messages = state.get("messages", [])
+    rejection_notes = messages[-1]["content"] if messages else "Review notes missing."
+    
+    prompt = f"""
+    You are the CurateAI Senior Copy Editor.
+
+    The following newsletter draft was flagged for hallucinations/errors.
+    Here is the specific feedback you must address:
+    {rejection_notes}
+    
+    Original Draft: 
+    {draft}
+    
+    Rewrite this draft entirely to fix the noted issues. Output only the final updated HTML, with no conversational filler.
+    """
+    
+    logger.info("Revising draft based on editor feedback")
+    response = await BaseAgentService.call_llm(messages=[{"role": "user", "content": prompt}])
+    
+    return {"generated_content": response, "status": "REVISED"}
+
+def review_condition(state: AgentState) -> str:
+    """
+    Determines if the graph should end or go to the revision node.
+    """
+    if state.get("status") == "REVISION_NEEDED":
+        return "revise"
+    return "end"
+
 def get_b2c_newsletter_graph():
     """
     Builds the static LangGraph for B2C Newsletters.
-    # TODO: Abhinav - Complete Task 5 and 6 (Add conditional logic and editor_revise node).
+    Complete with fact-checking and revision loops.
     """
     workflow = create_base_graph()
     
@@ -145,12 +181,25 @@ def get_b2c_newsletter_graph():
     workflow.add_node("curate", curate_content)
     workflow.add_node("write", generate_newsletter)
     workflow.add_node("editor_review", editor_review)
+    workflow.add_node("editor_revise", editor_revise)
     
     # 2. Define Edges
     workflow.set_entry_point("init")
     workflow.add_edge("init", "curate")
     workflow.add_edge("curate", "write")
     workflow.add_edge("write", "editor_review")
-    workflow.add_edge("editor_review", END)
+    
+    # Task 6: Add Conditional Branching
+    workflow.add_conditional_edges(
+        "editor_review",
+        review_condition,
+        {
+            "revise": "editor_revise",
+            "end": END
+        }
+    )
+    
+    # After revision, go back for another review (Self-healing loop)
+    workflow.add_edge("editor_revise", "editor_review")
     
     return workflow.compile()
