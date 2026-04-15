@@ -10,13 +10,26 @@ logger = get_logger("app.services.b2b_agent")
 
 
 async def initialize_state(state: AgentState) -> Dict[str, Any]:
-  
+    """
+    Step 1: Set up the Enterprise context (Industry, Competitors).
+    """
     logger.info("Initializing B2B Agent State", user_id=state.get("user_id"))
     return {"status": "INITIALIZED"}
 
 
 async def extract_intelligence(state: AgentState) -> Dict[str, Any]:
-   
+    """
+    Step 2: Deep search for social signals and cluster weights.
+
+    Retrieves cross-cluster business intelligence using SearchService (limit=10
+    for broader coverage than B2C), then applies a 3-signal SEO opportunity
+    scoring algorithm:
+      - Relevance   (40%): vector similarity score from Qdrant
+      - Velocity    (30%): cluster_size as a proxy for cross-source coverage
+      - Competition Gap (30%): inverse cluster_size — fewer sources = bigger gap
+    Each article is tagged with an urgency tier:
+      HIDDEN GEM (≥85) | ACT NOW (≥70) | MONITOR (≥50) | SKIP (<50)
+    """
     user_id = state.get("user_id")
     logger.info("Extracting B2B intelligence", user_id=user_id)
 
@@ -82,7 +95,15 @@ async def extract_intelligence(state: AgentState) -> Dict[str, Any]:
 
 
 async def generate_report(state: AgentState) -> Dict[str, Any]:
-    
+    """
+    Step 3: Generate high-level Executive Summary (Markdown).
+
+    Formats the scored intelligence signals into a structured enterprise briefing
+    via the LLM gateway. The prompt enforces three mandatory sections:
+      1. Key Opportunity Signals  — top HIDDEN GEM / ACT NOW topics
+      2. Market Trends Overview   — cross-cluster pattern analysis
+      3. Recommended Actions      — concrete prioritized next steps
+    """
     articles = state.get("retrieved_articles", [])
     if not articles:
         return {
