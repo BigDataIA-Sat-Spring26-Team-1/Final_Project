@@ -153,3 +153,14 @@ class IngestionBatchResponse(BaseModel):
     start_time: str
     end_time: str
     processing_time_seconds: float
+
+# --- Newsletter Agent Models ---
+
+class B2CNewsletterRequest(BaseModel):
+    user_id: str
+    execution_mode: str = Field(default="polished", description="Allows skipping the Fact-Checker loop for speed ('fast' vs 'polished')")
+
+class B2CNewsletterResponse(BaseModel):
+    status: str
+    html_content: str
+    execution_path_taken: List[str] = Field(default_factory=list, description="Array plotting the LangGraph nodes triggered natively for UI visibility")

@@ -112,6 +112,9 @@ app.include_router(deduplication.router, prefix="/api/v1/deduplication", tags=["
 app.include_router(trend.router, prefix="/api/v1/trend", tags=["Trend Engine"])
 app.include_router(search.router, prefix="/api/v1/search", tags=["Retrieval"])
 
+from app.api.newsletter import router as newsletter_router
+app.include_router(newsletter_router, prefix="/api/v1/newsletter", tags=["Newsletter Delivery"])
+
 
 @app.get("/api/v1/health", tags=["System"])
 async def health_check(
