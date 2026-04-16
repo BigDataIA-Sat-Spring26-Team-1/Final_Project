@@ -11,6 +11,7 @@ class AgentState(TypedDict):
     """
     # Context
     user_id: str
+    execution_mode: str
     user_persona: Dict[str, Any]
     
     # Data pipeline

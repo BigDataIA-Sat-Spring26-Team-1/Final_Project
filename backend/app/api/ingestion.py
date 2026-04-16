@@ -9,6 +9,7 @@ from app.core.schemas import IngestionBatchResponse
 from app.db.snowflake import get_db_connection
 from app.services.ingestion import IngestionService
 from app.repository.article import ArticleRepository
+from app.core.cache import INTERNAL_CACHE
 
 logger = get_logger("app.api.ingestion")
 router = APIRouter()
@@ -29,6 +30,11 @@ async def trigger_rss_ingestion(request: Request, db: SnowflakeConnection = Depe
     try:
         articles = await IngestionService.fetch_all_sources()
         saved_count = ArticleRepository.upsert_raw_articles(db, articles)
+
+        # Task 18: Invalidate all archetype caches since new news is available
+        if saved_count > 0:
+            INTERNAL_CACHE.clear()
+            logger.info("Global newsletter cache invalidated due to new ingestion")
 
         duration = time.perf_counter() - start_perf
         y_start, y_end = IngestionService._get_yesterday_range()
