@@ -161,6 +161,16 @@ async def editor_revise(state: AgentState) -> Dict[str, Any]:
     
     return {"generated_content": response, "status": "REVISED"}
 
+def route_execution_mode(state: AgentState) -> str:
+    """
+    Tasks 12 & 13: Splits graph execution.
+    Fast mode bypasses the editor straight to END.
+    Polished mode goes to editor_review.
+    """
+    if state.get("execution_mode") == "fast":
+        return "fast"
+    return "polished"
+
 def review_condition(state: AgentState) -> str:
     """
     Determines if the graph should end or go to the revision node.
@@ -187,7 +197,16 @@ def get_b2c_newsletter_graph():
     workflow.set_entry_point("init")
     workflow.add_edge("init", "curate")
     workflow.add_edge("curate", "write")
-    workflow.add_edge("write", "editor_review")
+    
+    # Tasks 12 & 13: Dynamically route execution based on speed
+    workflow.add_conditional_edges(
+        "write",
+        route_execution_mode,
+        {
+            "fast": END,                 # The Fast Mode Exit Bypass
+            "polished": "editor_review"  # The Polished Mode Safe Loop
+        }
+    )
     
     # Task 6: Add Conditional Branching
     workflow.add_conditional_edges(
