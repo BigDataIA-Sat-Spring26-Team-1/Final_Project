@@ -1,12 +1,14 @@
 from fastapi import APIRouter, HTTPException
 from app.core.schemas import B2CNewsletterRequest, B2CNewsletterResponse
 from app.services.b2c_agent import get_b2c_newsletter_graph
+from app.core.cache import cached_newsletter
 from app.core.logging_conf import get_logger
 
 logger = get_logger("newsletter_api")
 router = APIRouter()
 
 @router.post("/b2c", response_model=B2CNewsletterResponse)
+@cached_newsletter
 async def generate_b2c_newsletter(request: B2CNewsletterRequest):
     """
     Executes the B2C Newsletter LangGraph workflow for a specific user.
