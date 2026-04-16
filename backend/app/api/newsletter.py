@@ -20,6 +20,7 @@ async def generate_b2c_newsletter(request: B2CNewsletterRequest):
         # Initialize the baseline agent state container
         initial_state = {
             "user_id": request.user_id,
+            "execution_mode": request.execution_mode,
             "status": "PENDING",
             "messages": []
         }
