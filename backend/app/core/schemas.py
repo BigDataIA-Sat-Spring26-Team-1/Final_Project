@@ -104,6 +104,7 @@ class PersonaExtractionResult(BaseModel):
     primary_interests: List[str] = Field(description="List of primary professional interests or specializations.")
     technical_skills: List[str] = Field(description="List of hard technical skills extracted from the document.")
     bio_summary: str = Field(description="A 2-sentence professional bio summary.")
+    persona_archetype: str = Field(description="One of: ML_RESEARCHER, AI_SYSTEMS_ENGINEER, DATA_STRATEGIST, PRODUCT_LEAD_AI, POLICY_ETHICS_GURU, GENERAL_TECH_ENVELOPE")
     category_weights: CategoryWeights
     source_type: str = Field(description="Inferred classification (e.g. LinkedIn PDF, Resume)")
     extraction_latency_seconds: float = Field(default=0.0)
@@ -131,6 +132,7 @@ class UserPersonaUpdate(BaseModel):
     linkedin_url: Optional[str] = None
     job_title: Optional[str] = None
     seniority: Optional[str] = None
+    persona_archetype: Optional[str] = None
     bio_summary: Optional[str] = None
     explicit_category_weights: Dict[str, float]
 
