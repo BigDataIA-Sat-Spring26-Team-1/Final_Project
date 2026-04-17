@@ -150,3 +150,13 @@ async def health_check(
     except Exception:
         logger.error("Snowflake health check failed", exc_info=True)
         raise HTTPException(status_code=503, detail="Database connection failed")
+
+
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+from app.core.metrics import REGISTRY
+from fastapi import Response
+
+@app.get("/metrics", tags=["System"])
+async def metrics():
+    """Exposes all internal telemetry for Prometheus scraping."""
+    return Response(content=generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
