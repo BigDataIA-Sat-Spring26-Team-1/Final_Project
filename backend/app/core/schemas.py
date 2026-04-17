@@ -1,6 +1,6 @@
 from datetime import datetime
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Literal
 
 class UserBase(BaseModel):
     email: str
@@ -160,7 +160,7 @@ class IngestionBatchResponse(BaseModel):
 
 class B2CNewsletterRequest(BaseModel):
     user_id: str
-    execution_mode: str = Field(default="polished", description="Allows skipping the Fact-Checker loop for speed ('fast' vs 'polished')")
+    execution_mode: Literal["fast", "polished"] = Field(default="polished", description="Allows skipping the Fact-Checker loop for speed ('fast' vs 'polished')")
 
 class B2CNewsletterResponse(BaseModel):
     status: str

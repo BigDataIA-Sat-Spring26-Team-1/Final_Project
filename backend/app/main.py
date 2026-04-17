@@ -1,6 +1,8 @@
+import time
 import uuid
 import structlog
 import snowflake.connector
+from app.core.metrics import HTTP_REQUEST_DURATION
 
 from contextlib import asynccontextmanager
 
@@ -68,7 +70,17 @@ async def request_context_middleware(request: Request, call_next):
         path=request.url.path,
     )
 
+    start_time = time.perf_counter()
     response = await call_next(request)
+    duration = time.perf_counter() - start_time
+
+    # Task 20: Record Prometheus Latency
+    HTTP_REQUEST_DURATION.labels(
+        method=request.method,
+        endpoint=request.url.path
+    ).observe(duration)
+
+    response.headers["X-Process-Time"] = str(duration)
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
@@ -138,3 +150,13 @@ async def health_check(
     except Exception:
         logger.error("Snowflake health check failed", exc_info=True)
         raise HTTPException(status_code=503, detail="Database connection failed")
+
+
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+from app.core.metrics import REGISTRY
+from fastapi import Response
+
+@app.get("/metrics", tags=["System"])
+async def metrics():
+    """Exposes all internal telemetry for Prometheus scraping."""
+    return Response(content=generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
