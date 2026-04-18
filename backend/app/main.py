@@ -160,3 +160,18 @@ from fastapi import Response
 async def metrics():
     """Exposes all internal telemetry for Prometheus scraping."""
     return Response(content=generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
+
+
+# --- Task 23-25: MCP Integration ---
+# Exposing CurateAI tools to the Model Context Protocol ecosystem.
+from app.core.mcp_server import mcp_server
+
+# Mount the MCP server as a sub-application
+# This exposes /sse and /messages required for MCP Clients to connect
+try:
+    # Attempt standard FastMCP mounting
+    mcp_server.mount_to(app, prefix="/api/v1/mcp")
+    logger.info("MCP server successfully mounted at /api/v1/mcp")
+except Exception as e:
+    logger.warning(f"MCP server mounting failed: {str(e)}")
+    pass
