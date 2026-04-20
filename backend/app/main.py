@@ -1,60 +1,80 @@
+"""FastAPI entrypoint for the CurateAI backend.
+
+Wires up:
+    * Lifespan hooks that sync Snowflake + Qdrant schema on startup.
+    * Structured logging + a per-request context (request_id, client_ip).
+    * CORS, gzip, and rate limiting middleware.
+    * A small family of system endpoints (`/livez`, `/api/v1/health`, `/metrics`).
+    * All API routers under `/api/v1/*`.
+    * The FastMCP sub-application at `/api/v1/mcp` for Claude Desktop.
+"""
 import time
 import uuid
-import structlog
-import snowflake.connector
-
 from contextlib import asynccontextmanager
 
-from fastapi import Response
-from app.core.metrics import REGISTRY
-from fastapi.responses import JSONResponse
-from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.middleware.cors import CORSMiddleware
+import snowflake.connector
+import structlog
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi import FastAPI, Depends, HTTPException, Request
-
-from app.core.limiter import limiter
-from app.core.errors import ErrorResponse
-from app.db.qdrant import sync_vector_collections
-from app.core.config import Settings, get_settings
-from app.core.metrics import HTTP_REQUEST_DURATION
-from app.core.logging_conf import setup_logging, get_logger
-from app.api import personas, ingestion, deduplication, trend, search, b2b
-from app.db.snowflake import get_db_connection, sync_database_schema
-
-from slowapi.errors import RateLimitExceeded
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import JSONResponse
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from slowapi import _rate_limit_exceeded_handler
-
+from slowapi.errors import RateLimitExceeded
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+from app.api import b2b, deduplication, ingestion, personas, search, trend
+from app.api.newsletter import router as newsletter_router
+from app.core.config import Settings, get_settings
+from app.core.errors import ErrorResponse
+from app.core.limiter import limiter
+from app.core.logging_conf import get_logger, setup_logging
+from app.core.mcp_server import mcp_server
+from app.core.metrics import HTTP_REQUEST_DURATION, REGISTRY
+from app.db.qdrant import sync_vector_collections
+from app.db.snowflake import get_db_connection, sync_database_schema
 
 
+# Logging has to be configured before any logger is bound — otherwise early
+# log lines fall back to stdlib defaults and miss the JSON/console renderer.
 setup_logging(get_settings().app_env)
 logger = get_logger("app")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Application starting up...")
+    """Run once when the ASGI app boots and once when it drains.
+
+    Both sync functions are idempotent, so re-running them on every Cloud Run
+    revision is safe and saves a separate migration job.
+    """
+    logger.info("Application starting up")
     sync_database_schema()
     sync_vector_collections()
     yield
-    logger.info("Application shutting down...")
+    logger.info("Application shutting down")
+
 
 app = FastAPI(
     title="CurateAI Intelligence Platform",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
+
+# slowapi wires its limiter into the app state and hooks the 429 response.
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+# Compress anything meaningfully sized — newsletter HTML bodies benefit most.
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
+# CORS origins come from config so the same image runs locally against
+# http://localhost:3000 and on Cloud Run against https://curateai-frontend...
+_settings = get_settings()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=_settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -63,7 +83,12 @@ app.add_middleware(
 
 @app.middleware("http")
 async def request_context_middleware(request: Request, call_next):
-    """Attaches a unique request ID and client metadata to every log line."""
+    """Tag every log line with a request_id + client metadata.
+
+    The context is bound via ``structlog.contextvars`` so async call stacks
+    inherit it automatically — no need to thread the request_id through
+    service signatures.
+    """
     request_id = str(uuid.uuid4())
     client_ip = request.client.host if request.client else "unknown"
 
@@ -79,100 +104,143 @@ async def request_context_middleware(request: Request, call_next):
     response = await call_next(request)
     duration = time.perf_counter() - start_time
 
-    # Task 20: Record Prometheus Latency
+    # Prometheus histogram (see app.core.metrics) — powers p95 latency alerts.
     HTTP_REQUEST_DURATION.labels(
         method=request.method,
-        endpoint=request.url.path
+        endpoint=request.url.path,
     ).observe(duration)
 
-    response.headers["X-Process-Time"] = str(duration)
+    response.headers["X-Process-Time"] = f"{duration:.4f}"
     response.headers["X-Request-ID"] = request_id
+    # Low-hanging security headers — no reason not to send them.
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     return response
 
 
+# ---- Exception handlers ------------------------------------------------------
+# All three return the same ErrorResponse shape so clients can parse errors
+# uniformly regardless of whether the failure was a 404, 422, or 500.
+
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
-    """Returns a consistent JSON error shape for HTTP errors (404, 403, etc.)."""
+    """Shape known HTTP errors (404, 403, 503, …) into our ErrorResponse envelope."""
     logger.warning("HTTP exception", status_code=exc.status_code, detail=exc.detail)
     return JSONResponse(
         status_code=exc.status_code,
-        content=ErrorResponse(message=str(exc.detail)).model_dump()
+        content=ErrorResponse(message=str(exc.detail)).model_dump(),
     )
 
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """Returns a consistent JSON error shape for Pydantic validation failures (422)."""
+    """Convert Pydantic validation failures (422) into a JSON error response."""
     logger.warning("Request validation failed", errors=exc.errors())
     return JSONResponse(
         status_code=422,
-        content=ErrorResponse(message="Validation error", detail=str(exc.errors())).model_dump()
+        content=ErrorResponse(
+            message="Validation error", detail=str(exc.errors())
+        ).model_dump(),
     )
 
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    """Catch-all handler to prevent raw stack traces from reaching the client."""
+    """Catch-all so raw tracebacks never leak to clients.
+
+    The structured logger captures ``exc_info`` which preserves the full
+    traceback in Cloud Logging for postmortem debugging.
+    """
     logger.error("Unhandled exception", exc_info=True)
     return JSONResponse(
         status_code=500,
-        content=ErrorResponse(message="Internal server error").model_dump()
+        content=ErrorResponse(message="Internal server error").model_dump(),
     )
 
 
-# --- Route Registration ---
+# ---- Route registration ------------------------------------------------------
 app.include_router(personas.router, prefix="/api/v1/personas", tags=["Personas"])
 app.include_router(ingestion.router, prefix="/api/v1/ingestion", tags=["Ingestion Hub"])
 app.include_router(deduplication.router, prefix="/api/v1/deduplication", tags=["Deduplication"])
 app.include_router(trend.router, prefix="/api/v1/trend", tags=["Trend Engine"])
 app.include_router(search.router, prefix="/api/v1/search", tags=["Retrieval"])
 app.include_router(b2b.router, prefix="/api/v1/b2b", tags=["B2B Intelligence"])
-
-from app.api.newsletter import router as newsletter_router
 app.include_router(newsletter_router, prefix="/api/v1/newsletter", tags=["Newsletter Delivery"])
+
+
+# ---- System endpoints --------------------------------------------------------
+
+@app.get("/", tags=["System"], include_in_schema=False)
+async def root():
+    """Friendly landing route — Cloud Run's default probe hits `/`."""
+    return {"service": "curateai-backend", "status": "ok", "docs": "/docs"}
+
+
+@app.get("/livez", tags=["System"])
+async def liveness():
+    """Cheap liveness probe.
+
+    Returns 200 as long as the event loop is responsive. Kept deliberately
+    free of downstream dependency checks — if Snowflake blips we do NOT want
+    Cloud Run to restart the container, we just want to fail reads gracefully.
+    """
+    return {"status": "alive"}
 
 
 @app.get("/api/v1/health", tags=["System"])
 async def health_check(
     settings: Settings = Depends(get_settings),
-    db: snowflake.connector.SnowflakeConnection = Depends(get_db_connection)
+    db: snowflake.connector.SnowflakeConnection = Depends(get_db_connection),
 ):
-    """Verifies app configuration and Snowflake connectivity."""
+    """Readiness probe — verifies we can actually serve traffic.
+
+    Runs a trivial ``SELECT CURRENT_VERSION()`` against Snowflake so a 200 here
+    implies credentials are valid, the warehouse is reachable, and the pool is
+    healthy. Returns 503 on any failure so upstream load balancers route away.
+    """
     try:
         cursor = db.cursor()
         cursor.execute("SELECT CURRENT_VERSION()")
         sf_version = cursor.fetchone()[0]
 
         logger.info("Health check passed", snowflake_version=sf_version)
-
         return {
             "status": "healthy",
             "app_name": settings.app_name,
             "version": settings.app_version,
-            "snowflake_version": sf_version
+            "environment": settings.app_env,
+            "snowflake_version": sf_version,
         }
     except Exception:
         logger.error("Snowflake health check failed", exc_info=True)
         raise HTTPException(status_code=503, detail="Database connection failed")
 
+
 @app.get("/metrics", tags=["System"])
 async def metrics():
-    """Exposes all internal telemetry for Prometheus scraping."""
+    """Prometheus scrape endpoint.
+
+    Serves the process-wide registry (HTTP latency, LLM token spend, LangGraph
+    node durations, …). Safe to expose on Cloud Run since it carries no PII;
+    protect behind IAP / allow-listed service accounts if that ever changes.
+    """
     return Response(content=generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
 
 
-# --- MCP Integration ---
-# Exposing CurateAI tools to the Model Context Protocol ecosystem.
-from app.core.mcp_server import mcp_server
-
-# Mount the MCP server as a sub-application
-# This exposes /sse and /messages required for MCP Clients to connect
+# ---- MCP integration ---------------------------------------------------------
+# Mount FastMCP as a sub-application so the same container serves both REST and
+# the MCP tool surface at /api/v1/mcp/{sse,messages}. If the SDK's mount API
+# changes (it has before) we log loudly and keep serving REST — the rest of the
+# platform should not die because MCP wiring drifted.
 try:
-    # Attempt standard FastMCP mounting
     mcp_server.mount_to(app, prefix="/api/v1/mcp")
-    logger.info("MCP server successfully mounted at /api/v1/mcp")
-except Exception as e:
-    logger.warning(f"MCP server mounting failed: {str(e)}")
-    pass
+    logger.info("MCP server mounted", prefix="/api/v1/mcp")
+except AttributeError:
+    # Older FastMCP exposes .sse_app() instead of .mount_to(); try that path.
+    try:
+        app.mount("/api/v1/mcp", mcp_server.sse_app())
+        logger.info("MCP server mounted via sse_app()", prefix="/api/v1/mcp")
+    except Exception:
+        logger.error("MCP server mount failed — REST API will still serve", exc_info=True)
+except Exception:
+    logger.error("MCP server mount failed — REST API will still serve", exc_info=True)
