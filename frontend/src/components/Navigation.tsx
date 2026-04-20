@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 type Role = 'ADMIN' | 'USER' | 'COMPANY';
 
@@ -46,17 +46,16 @@ export function Navigation() {
   const pathname = usePathname();
   const [role, setRole] = useState<Role>('ADMIN');
   const [isRoleMenuOpen, setIsRoleMenuOpen] = useState(false);
-  const [isMounted, setIsMounted] = useState(false);
+  const [hasMounted, setHasMounted] = useState(false);
 
   // Initialize role from localStorage on mount
-  useState(() => {
-    if (typeof window !== 'undefined') {
-      const savedRole = localStorage.getItem('curateai_role') as Role;
-      if (savedRole && (['ADMIN', 'USER', 'COMPANY'] as Role[]).includes(savedRole)) {
-        setRole(savedRole);
-      }
+  useEffect(() => {
+    setHasMounted(true);
+    const savedRole = localStorage.getItem('curateai_role') as Role;
+    if (savedRole && (['ADMIN', 'USER', 'COMPANY'] as Role[]).includes(savedRole)) {
+      setRole(savedRole);
     }
-  });
+  }, []);
 
   // Persist role changes
   const handleRoleChange = (newRole: Role) => {
@@ -66,6 +65,20 @@ export function Navigation() {
   };
 
   const activeNav = NAV_CONFIG[role];
+
+  // Prevent hydration mismatch by not rendering role-dependent UI until mounted
+  // In a real app, you might want a localized fallback or skeleton
+  if (!hasMounted) {
+    return (
+      <nav className="fixed left-0 top-0 h-full w-64 glass border-r border-white/5 p-6 space-y-8 z-50 flex flex-col">
+        <div className="flex items-center gap-2 mb-4">
+          <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center font-black text-xs text-primary-foreground">C</div>
+          <span className="text-xl font-bold tracking-tight gradient-text">CurateAI</span>
+        </div>
+        <div className="flex-1" />
+      </nav>
+    );
+  }
 
   return (
     <nav className="fixed left-0 top-0 h-full w-64 glass border-r border-white/5 p-6 space-y-8 z-50 flex flex-col">
