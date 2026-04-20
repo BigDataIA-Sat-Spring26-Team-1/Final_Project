@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS user_personas (
     linkedin_url VARCHAR(2000),
     job_title VARCHAR(255),
     seniority VARCHAR(100),
+    persona_archetype VARCHAR(100), -- Classification into 5-7 core archetypes for scaled caching
     bio_summary TEXT, -- LLM extracted bio summarizing their professional background
     explicit_category_weights VARIANT, -- Weights declared initially or extracted at onboarding
     behavioral_category_weights VARIANT, -- Weights dynamically adjusted via weekly feedback loops

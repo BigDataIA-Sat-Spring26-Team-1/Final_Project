@@ -62,6 +62,7 @@ class PersonaService:
                     linkedin_url=None, # Only if we had a field for it, currently extracted name/title
                     job_title=profile.job_title,
                     seniority=profile.seniority,
+                    persona_archetype=profile.persona_archetype,
                     bio_summary=profile.bio_summary,
                     explicit_category_weights=profile.category_weights.model_dump()
                 )

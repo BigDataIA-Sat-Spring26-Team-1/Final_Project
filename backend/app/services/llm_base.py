@@ -10,6 +10,7 @@ from tenacity import (
 
 from app.core.config import get_settings
 from app.core.logging_conf import get_logger
+from app.core.metrics import LLM_REQUESTS_TOTAL, LLM_TOKENS_TOTAL, LLM_COST_TOTAL
 
 from typing import Type, TypeVar, List, Dict
 
@@ -58,10 +59,23 @@ class BaseLLMService:
             if not content_str:
                 logger.warning("LLM response content is empty")
                 raise ValueError("LLM returned an empty response content.")
+            
+            # Task 21: Record Metrics
+            usage = getattr(response, 'usage', None)
+            if usage:
+                LLM_TOKENS_TOTAL.labels(model=model, token_type="prompt").inc(usage.prompt_tokens)
+                LLM_TOKENS_TOTAL.labels(model=model, token_type="completion").inc(usage.completion_tokens)
                 
+                # Simple heuristic estimation ($0.15 / 1M for gpt-4o-mini)
+                cost = (usage.prompt_tokens * 0.00000015) + (usage.completion_tokens * 0.0000006)
+                LLM_COST_TOTAL.labels(model=model).inc(cost)
+
+            LLM_REQUESTS_TOTAL.labels(model=model, status="success").inc()
+            
             return response_model.model_validate_json(content_str)
             
         except Exception as e:
+            LLM_REQUESTS_TOTAL.labels(model=model, status="error").inc()
             logger.error("Structured LLM completion failed", model=model, error=str(e), error_type=type(e).__name__)
             raise
 
@@ -90,7 +104,18 @@ class BaseLLMService:
                 temperature=temperature,
                 api_key=settings.openai_api_key
             )
+            usage = getattr(response, 'usage', None)
+            if usage:
+                LLM_TOKENS_TOTAL.labels(model=model, token_type="prompt").inc(usage.prompt_tokens)
+                LLM_TOKENS_TOTAL.labels(model=model, token_type="completion").inc(usage.completion_tokens)
+                
+                cost = (usage.prompt_tokens * 0.00000015) + (usage.completion_tokens * 0.0000006)
+                LLM_COST_TOTAL.labels(model=model).inc(cost)
+
+            LLM_REQUESTS_TOTAL.labels(model=model, status="success").inc()
             return response.choices[0].message.content or ""
+            
         except Exception as e:
+            LLM_REQUESTS_TOTAL.labels(model=model, status="error").inc()
             logger.error("LLM text completion failed", error=str(e))
             raise RuntimeError(f"LLM Error: {str(e)}")
