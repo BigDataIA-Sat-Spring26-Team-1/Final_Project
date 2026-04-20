@@ -1,6 +1,7 @@
 from datetime import datetime
+from enum import Enum
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Literal
 
 class UserBase(BaseModel):
     email: str
@@ -104,6 +105,7 @@ class PersonaExtractionResult(BaseModel):
     primary_interests: List[str] = Field(description="List of primary professional interests or specializations.")
     technical_skills: List[str] = Field(description="List of hard technical skills extracted from the document.")
     bio_summary: str = Field(description="A 2-sentence professional bio summary.")
+    persona_archetype: str = Field(description="One of: ML_RESEARCHER, AI_SYSTEMS_ENGINEER, DATA_STRATEGIST, PRODUCT_LEAD_AI, POLICY_ETHICS_GURU, GENERAL_TECH_ENVELOPE")
     category_weights: CategoryWeights
     source_type: str = Field(description="Inferred classification (e.g. LinkedIn PDF, Resume)")
     extraction_latency_seconds: float = Field(default=0.0)
@@ -131,6 +133,7 @@ class UserPersonaUpdate(BaseModel):
     linkedin_url: Optional[str] = None
     job_title: Optional[str] = None
     seniority: Optional[str] = None
+    persona_archetype: Optional[str] = None
     bio_summary: Optional[str] = None
     explicit_category_weights: Dict[str, float]
 
@@ -153,3 +156,45 @@ class IngestionBatchResponse(BaseModel):
     start_time: str
     end_time: str
     processing_time_seconds: float
+
+
+# --- B2B Intelligence Report Models ---
+
+class B2BReportRequest(BaseModel):
+    user_id: str = Field(..., description="Corporate client identifier.")
+
+class B2BReportResponse(BaseModel):
+    user_id: str
+    report: str
+    status: str
+
+
+# --- Behavioral Refinement Models ---
+
+class FeedbackType(str, Enum):
+    like = "like"
+    dislike = "dislike"
+    skip = "skip"
+
+class ArticleFeedbackRequest(BaseModel):
+    user_id: str = Field(..., description="The user providing feedback.")
+    article_categories: Dict[str, float] = Field(
+        ...,
+        description="Category weights for the article (e.g. {'llms': 0.8, 'security': 0.2})."
+    )
+    feedback: FeedbackType
+
+class ArticleFeedbackResponse(BaseModel):
+    user_id: str
+    updated_categories: Dict[str, float]
+    message: str
+# --- Newsletter Agent Models ---
+
+class B2CNewsletterRequest(BaseModel):
+    user_id: str
+    execution_mode: Literal["fast", "polished"] = Field(default="polished", description="Allows skipping the Fact-Checker loop for speed ('fast' vs 'polished')")
+
+class B2CNewsletterResponse(BaseModel):
+    status: str
+    html_content: str
+    execution_path_taken: List[str] = Field(default_factory=list, description="Array plotting the LangGraph nodes triggered natively for UI visibility")

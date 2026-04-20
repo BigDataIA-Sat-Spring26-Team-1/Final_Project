@@ -1,27 +1,34 @@
+import time
 import uuid
 import structlog
 import snowflake.connector
 
 from contextlib import asynccontextmanager
 
+from fastapi import Response
+from app.core.metrics import REGISTRY
 from fastapi.responses import JSONResponse
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi import FastAPI, Depends, HTTPException, Request
 
+from app.core.limiter import limiter
 from app.core.errors import ErrorResponse
 from app.db.qdrant import sync_vector_collections
 from app.core.config import Settings, get_settings
-from app.core.limiter import limiter
+from app.core.metrics import HTTP_REQUEST_DURATION
 from app.core.logging_conf import setup_logging, get_logger
-from app.api import personas, ingestion, deduplication, trend, search
+from app.api import personas, ingestion, deduplication, trend, search, b2b
 from app.db.snowflake import get_db_connection, sync_database_schema
 
 from slowapi.errors import RateLimitExceeded
 from slowapi import _rate_limit_exceeded_handler
 
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+
 
 setup_logging(get_settings().app_env)
 logger = get_logger("app")
@@ -68,7 +75,17 @@ async def request_context_middleware(request: Request, call_next):
         path=request.url.path,
     )
 
+    start_time = time.perf_counter()
     response = await call_next(request)
+    duration = time.perf_counter() - start_time
+
+    # Task 20: Record Prometheus Latency
+    HTTP_REQUEST_DURATION.labels(
+        method=request.method,
+        endpoint=request.url.path
+    ).observe(duration)
+
+    response.headers["X-Process-Time"] = str(duration)
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
@@ -111,6 +128,10 @@ app.include_router(ingestion.router, prefix="/api/v1/ingestion", tags=["Ingestio
 app.include_router(deduplication.router, prefix="/api/v1/deduplication", tags=["Deduplication"])
 app.include_router(trend.router, prefix="/api/v1/trend", tags=["Trend Engine"])
 app.include_router(search.router, prefix="/api/v1/search", tags=["Retrieval"])
+app.include_router(b2b.router, prefix="/api/v1/b2b", tags=["B2B Intelligence"])
+
+from app.api.newsletter import router as newsletter_router
+app.include_router(newsletter_router, prefix="/api/v1/newsletter", tags=["Newsletter Delivery"])
 
 
 @app.get("/api/v1/health", tags=["System"])
@@ -135,3 +156,23 @@ async def health_check(
     except Exception:
         logger.error("Snowflake health check failed", exc_info=True)
         raise HTTPException(status_code=503, detail="Database connection failed")
+
+@app.get("/metrics", tags=["System"])
+async def metrics():
+    """Exposes all internal telemetry for Prometheus scraping."""
+    return Response(content=generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
+
+
+# --- MCP Integration ---
+# Exposing CurateAI tools to the Model Context Protocol ecosystem.
+from app.core.mcp_server import mcp_server
+
+# Mount the MCP server as a sub-application
+# This exposes /sse and /messages required for MCP Clients to connect
+try:
+    # Attempt standard FastMCP mounting
+    mcp_server.mount_to(app, prefix="/api/v1/mcp")
+    logger.info("MCP server successfully mounted at /api/v1/mcp")
+except Exception as e:
+    logger.warning(f"MCP server mounting failed: {str(e)}")
+    pass
