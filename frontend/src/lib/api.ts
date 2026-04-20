@@ -230,6 +230,19 @@ export interface HealthResponse {
   snowflake_version: string;
 }
 
+/** Returned by GET /api/v1/personas/{user_id}. */
+export interface StoredPersona {
+  user_id: string;
+  job_title: string | null;
+  seniority: string | null;
+  persona_archetype: string | null;
+  bio_summary: string | null;
+  /** Weights captured at onboarding. */
+  explicit_category_weights: Record<string, number>;
+  /** Weights refined by like/dislike/skip feedback. */
+  behavioral_category_weights: Record<string, number>;
+}
+
 // ============================================================================
 // System endpoints
 // ============================================================================
@@ -245,6 +258,14 @@ export function getHealth(signal?: AbortSignal) {
 // ============================================================================
 // Personas
 // ============================================================================
+
+/** Fetch the stored persona (explicit + behavioral weights) for a user. */
+export function getPersona(userId: string, signal?: AbortSignal): Promise<StoredPersona> {
+  return request<StoredPersona>(`/api/v1/personas/${encodeURIComponent(userId)}`, {
+    method: 'GET',
+    signal,
+  });
+}
 
 /**
  * Upload one or more PDFs (LinkedIn export, resume, etc.) and receive a

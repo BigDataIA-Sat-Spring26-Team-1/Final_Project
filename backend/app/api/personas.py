@@ -12,6 +12,7 @@ from app.core.schemas import (
     BatchPersonaResponse,
 )
 from app.db.snowflake import get_db_connection
+from app.repository.persona import PersonaRepository
 from app.services.persona_service import PersonaService
 
 logger = get_logger("app.api.personas")
@@ -126,3 +127,26 @@ async def record_article_feedback(
         updated_categories=behavioral_weights,
         message=f"Behavioral weights updated based on '{payload.feedback.value}' signal.",
     )
+
+
+# Keep the greedy /{user_id} path last so specific routes like /extract and
+# /feedback always match first. Adding a new /personas/... route above this
+# block is always the right call.
+@router.get("/{user_id}")
+async def get_user_persona(
+    user_id: str,
+    db: SnowflakeConnection = Depends(get_db_connection),
+):
+    """Fetch the stored persona for a user.
+
+    Returns both the explicit weights captured at onboarding and the behavioral
+    weights refined by feedback — the frontend needs both to render the
+    persona editor / dashboard. 404s when no persona row exists.
+    """
+    persona = PersonaRepository.get_persona(db, user_id)
+    if not persona:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No persona found for user_id '{user_id}'.",
+        )
+    return {"user_id": user_id, **persona}

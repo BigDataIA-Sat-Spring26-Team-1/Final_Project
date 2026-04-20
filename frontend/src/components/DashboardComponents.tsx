@@ -1,31 +1,41 @@
-import { 
-  ArrowUpRight, 
-  Clock, 
-  Zap, 
-  CheckCircle2, 
-  Newspaper,
-  TrendingUp,
-  Brain,
-  Search,
-  Activity,
-  Globe,
-  Flame,
-  Plus,
+import {
+  ArrowUpRight,
   Send,
   Eye,
   Trash2,
-  Mail,
   Users,
   Calendar,
-  ShieldCheck,
-  Target,
-  FileText,
-  MousePointer2
+  ThumbsUp,
+  ThumbsDown,
+  EyeOff,
+  Loader2,
 } from 'lucide-react';
+import { useState } from 'react';
+
+import {
+  ApiError,
+  submitArticleFeedback,
+  type FeedbackType,
+  type RankedArticle,
+} from '@/lib/api';
 import { cn } from '@/lib/utils';
 
+// ---- Shared prop shapes -----------------------------------------------------
+// Any icon from lucide-react satisfies this shape — we only render it and
+// forward a className, so the narrow signature is enough.
+type IconType = React.ComponentType<{ className?: string }>;
+
 // --- Global Stat Card ---
-export function StatCard({ title, value, change, description, icon: Icon, isWarning }: any) {
+type StatCardProps = {
+  title: string;
+  value: string | number;
+  /** "+12%", "-2%", or "0" — the + / - / 0 prefix drives the colour. */
+  change: string;
+  description: string;
+  icon: IconType;
+  isWarning?: boolean;
+};
+export function StatCard({ title, value, change, description, icon: Icon, isWarning }: StatCardProps) {
   return (
     <div className="glass rounded-2xl p-6 border border-white/5 space-y-4 hover:border-white/10 transition-all cursor-default group">
       <div className="flex items-center justify-between">
@@ -53,7 +63,14 @@ export function StatCard({ title, value, change, description, icon: Icon, isWarn
 }
 
 // --- Home Activity Item ---
-export function ActivityItem({ title, source, time, status, relevancy }: any) {
+type ActivityItemProps = {
+  title: string;
+  source: string;
+  time: string;
+  status: string;
+  relevancy: number;
+};
+export function ActivityItem({ title, source, time, status, relevancy }: ActivityItemProps) {
   return (
     <div className="glass rounded-2xl p-5 border border-white/5 flex items-center justify-between hover:bg-white/[0.02] active:scale-[0.99] transition-all cursor-pointer">
       <div className="space-y-1 max-w-[70%]">
@@ -81,7 +98,12 @@ export function ActivityItem({ title, source, time, status, relevancy }: any) {
 }
 
 // --- Home Trend Tag ---
-export function TrendTag({ name, count, velocity }: any) {
+type TrendTagProps = {
+  name: string;
+  count: number;
+  velocity: 'Surging' | 'High' | 'Peak' | 'Stable' | string;
+};
+export function TrendTag({ name, count, velocity }: TrendTagProps) {
   return (
     <div className="flex items-center justify-between group cursor-pointer">
       <div className="space-y-0.5">
@@ -102,7 +124,14 @@ export function TrendTag({ name, count, velocity }: any) {
 }
 
 // --- Trending Feature Card ---
-export function TrendFeatureCard({ title, value, icon: Icon, detail, isPrimary }: any) {
+type TrendFeatureCardProps = {
+  title: string;
+  value: string | number;
+  icon: IconType;
+  detail: string;
+  isPrimary?: boolean;
+};
+export function TrendFeatureCard({ title, value, icon: Icon, detail, isPrimary }: TrendFeatureCardProps) {
   return (
     <div className={cn(
       "glass rounded-2xl p-6 border border-white/5 space-y-3",
@@ -121,7 +150,8 @@ export function TrendFeatureCard({ title, value, icon: Icon, detail, isPrimary }
 }
 
 // --- Trending Entity Item ---
-export function EntityItem({ name, score, delta }: any) {
+type EntityItemProps = { name: string; score: number; delta: number };
+export function EntityItem({ name, score, delta }: EntityItemProps) {
   return (
     <div className="glass rounded-xl p-4 border border-white/5 flex items-center justify-between hover:bg-white/5 transition-colors">
       <div className="space-y-1">
@@ -139,7 +169,15 @@ export function EntityItem({ name, score, delta }: any) {
 }
 
 // --- Newsletter Draft Card ---
-export function DraftCard({ title, status, persona, date, recipients }: any) {
+type DraftStatus = 'DRAFT' | 'SCHEDULED' | 'SENT' | string;
+type DraftCardProps = {
+  title: string;
+  status: DraftStatus;
+  persona: string;
+  date: string;
+  recipients: number;
+};
+export function DraftCard({ title, status, persona, date, recipients }: DraftCardProps) {
   const isSent = status === 'SENT';
   const isScheduled = status === 'SCHEDULED';
 
@@ -201,8 +239,170 @@ export function DraftCard({ title, status, persona, date, recipients }: any) {
   );
 }
 
+// --- Feedable Article Row ---
+// Wraps an article row with like / dislike / skip buttons that post through
+// the persona feedback endpoint. Parent owns state — we just surface the
+// user's intent via onFeedback so pages can update the list (remove on skip,
+// etc.). Disables itself after one acknowledgement so a single article can't
+// double-register like+dislike.
+export function FeedableArticleRow({
+  article,
+  userId,
+  onFeedback,
+}: {
+  article: RankedArticle;
+  userId: string;
+  onFeedback?: (type: FeedbackType, article: RankedArticle) => void;
+}) {
+  const [busy, setBusy] = useState<FeedbackType | null>(null);
+  const [acknowledged, setAcknowledged] = useState<FeedbackType | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleFeedback = async (type: FeedbackType) => {
+    if (!userId) {
+      setError('Set a user id on the page before rating articles.');
+      return;
+    }
+    setBusy(type);
+    setError(null);
+    try {
+      await submitArticleFeedback({
+        user_id: userId,
+        article_categories: article.categories ?? {},
+        feedback: type,
+      });
+      setAcknowledged(type);
+      onFeedback?.(type, article);
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? `${err.status}: ${err.detail ?? err.message}`
+          : (err as Error).message,
+      );
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const relevancy = Math.round((article.score ?? 0) * 100);
+
+  return (
+    <div className="glass rounded-2xl p-5 border border-white/5 space-y-3 hover:bg-white/[0.02] transition-all">
+      <div className="flex items-center justify-between gap-4">
+        <div className="space-y-1 flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold tracking-widest uppercase text-primary/80">
+              {article.trend_status ?? 'RECOMMENDED'}
+            </span>
+            {article.cluster_size && article.cluster_size > 1 && (
+              <>
+                <span className="w-1 h-1 rounded-full bg-white/20" />
+                <span className="text-xs text-muted-foreground">
+                  {article.cluster_size} sources
+                </span>
+              </>
+            )}
+          </div>
+          <h4 className="text-base font-semibold truncate leading-tight">{article.title}</h4>
+          {article.summary && (
+            <p className="text-xs text-muted-foreground line-clamp-2">{article.summary}</p>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/5 border border-white/5 shrink-0">
+          <div
+            className={cn(
+              'w-1.5 h-1.5 rounded-full',
+              relevancy > 90 ? 'bg-emerald-500' : relevancy > 70 ? 'bg-amber-500' : 'bg-zinc-500',
+            )}
+          />
+          <span className="text-xs font-bold">{relevancy}%</span>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <FeedbackButton
+            onClick={() => handleFeedback('like')}
+            disabled={busy !== null || acknowledged !== null}
+            busy={busy === 'like'}
+            acknowledged={acknowledged === 'like'}
+            label="Like"
+            icon={ThumbsUp}
+          />
+          <FeedbackButton
+            onClick={() => handleFeedback('dislike')}
+            disabled={busy !== null || acknowledged !== null}
+            busy={busy === 'dislike'}
+            acknowledged={acknowledged === 'dislike'}
+            label="Dislike"
+            icon={ThumbsDown}
+          />
+          <FeedbackButton
+            onClick={() => handleFeedback('skip')}
+            disabled={busy !== null || acknowledged !== null}
+            busy={busy === 'skip'}
+            acknowledged={acknowledged === 'skip'}
+            label="Skip"
+            icon={EyeOff}
+          />
+        </div>
+        {acknowledged && (
+          <span className="text-[10px] uppercase tracking-widest font-black text-emerald-500">
+            {acknowledged} recorded
+          </span>
+        )}
+        {error && !acknowledged && (
+          <span className="text-[10px] uppercase tracking-widest font-black text-rose-400 truncate max-w-[240px]">
+            {error}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function FeedbackButton({
+  onClick,
+  disabled,
+  busy,
+  acknowledged,
+  label,
+  icon: Icon,
+}: {
+  onClick: () => void;
+  disabled: boolean;
+  busy: boolean;
+  acknowledged: boolean;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      className={cn(
+        'p-2 rounded-xl border text-xs font-bold transition-all flex items-center gap-1.5',
+        'border-white/5 bg-white/[0.02]',
+        acknowledged && 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400',
+        !acknowledged && !disabled && 'hover:bg-white/5 hover:border-white/10',
+        disabled && !acknowledged && 'opacity-40 cursor-not-allowed',
+      )}
+    >
+      {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Icon className="w-3.5 h-3.5" />}
+      <span className="sr-only">{label}</span>
+    </button>
+  );
+}
+
 // --- SEO Opportunity Item ---
-export function OpportunityItem({ topic, relevance, competition, category }: any) {
+type OpportunityItemProps = {
+  topic: string;
+  relevance: number;
+  competition: string;
+  category: string;
+};
+export function OpportunityItem({ topic, relevance, competition, category }: OpportunityItemProps) {
   return (
     <div className="glass rounded-2xl p-6 border border-white/5 flex items-center justify-between hover:border-primary/20 transition-all cursor-pointer group">
       <div className="space-y-1.5 flex-1">
