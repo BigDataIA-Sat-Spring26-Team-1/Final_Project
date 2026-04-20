@@ -1,0 +1,353 @@
+/**
+ * CurateAI backend API client.
+ *
+ * One place that knows how to talk to FastAPI. Every page / component should
+ * import the typed functions below instead of calling `fetch` directly — that
+ * way the base URL, error shape, and request headers stay in lockstep.
+ *
+ * Design notes:
+ *   - `NEXT_PUBLIC_API_URL` is baked in at build time by Next.js. Set it in
+ *     `.env.local` for dev and via the Cloud Run build step for production.
+ *   - All request helpers accept an optional `AbortSignal` so pages can cancel
+ *     in-flight calls when the user navigates away (avoids the "update on
+ *     unmounted component" warning).
+ *   - Errors are normalised to `ApiError` with both the HTTP status and the
+ *     server's `detail` payload, so UI code can render friendly messages
+ *     without re-parsing the response.
+ */
+
+// ---- Base URL ---------------------------------------------------------------
+// Backends typically bind to :8000 via `uv run uvicorn ...` or :8080 inside
+// Docker/Cloud Run. Either works — override with NEXT_PUBLIC_API_URL when
+// needed. No trailing slash (we always prefix paths with a leading /).
+export const API_BASE_URL: string =
+  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '') ?? 'http://localhost:8000';
+
+// ---- Error type -------------------------------------------------------------
+/**
+ * Thrown for any non-2xx response. Callers can `instanceof ApiError` to branch
+ * on transport-level failures vs. their own validation errors.
+ */
+export class ApiError extends Error {
+  public readonly status: number;
+  public readonly detail?: string;
+
+  constructor(message: string, status: number, detail?: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+// ---- Internal fetch helper --------------------------------------------------
+type RequestOptions = Omit<RequestInit, 'body'> & {
+  /** JSON-serialisable body for POST/PUT/PATCH. */
+  json?: unknown;
+  /** Pre-built FormData (for file uploads). Takes precedence over `json`. */
+  formData?: FormData;
+  /** Pre-built querystring as a plain object; values are URL-encoded. */
+  query?: Record<string, string | number | boolean | undefined>;
+  /** Optional abort signal for request cancellation. */
+  signal?: AbortSignal;
+};
+
+async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const { json, formData, query, headers, signal, ...rest } = options;
+
+  const qs = query
+    ? '?' +
+      Object.entries(query)
+        .filter(([, v]) => v !== undefined && v !== null)
+        .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+        .join('&')
+    : '';
+
+  // FormData sets its own Content-Type (including the multipart boundary), so
+  // we only set application/json when sending a JSON body.
+  const finalHeaders: HeadersInit = {
+    Accept: 'application/json',
+    ...(json !== undefined && !formData ? { 'Content-Type': 'application/json' } : {}),
+    ...(headers ?? {}),
+  };
+
+  const res = await fetch(`${API_BASE_URL}${path}${qs}`, {
+    ...rest,
+    headers: finalHeaders,
+    body: formData ?? (json !== undefined ? JSON.stringify(json) : undefined),
+    signal,
+  });
+
+  // 204 No Content is perfectly valid — don't try to parse an empty body.
+  if (res.status === 204) {
+    return undefined as T;
+  }
+
+  const rawText = await res.text();
+  const parsed = rawText ? tryParseJson(rawText) : undefined;
+
+  if (!res.ok) {
+    const detail =
+      typeof parsed === 'object' && parsed !== null && 'detail' in parsed
+        ? String((parsed as { detail: unknown }).detail)
+        : typeof parsed === 'object' && parsed !== null && 'message' in parsed
+        ? String((parsed as { message: unknown }).message)
+        : rawText;
+    throw new ApiError(
+      `API ${res.status} on ${path}`,
+      res.status,
+      detail || undefined,
+    );
+  }
+
+  return parsed as T;
+}
+
+function tryParseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+// ============================================================================
+// Types — mirror backend/app/core/schemas.py. Kept flat on purpose so pages
+// can destructure without chasing nested imports.
+// ============================================================================
+
+/** 10-category taxonomy from `CategoryWeights`. */
+export interface CategoryWeights {
+  llms: number;
+  ai_agents: number;
+  computer_vision: number;
+  security: number;
+  hardware: number;
+  software_engineering: number;
+  ai_policy: number;
+  general_ai: number;
+  data_engineering: number;
+  startups: number;
+}
+
+/** Result from the LLM persona extractor. */
+export interface PersonaExtractionResult {
+  name: string;
+  job_title: string;
+  seniority: string;
+  primary_interests: string[];
+  technical_skills: string[];
+  bio_summary: string;
+  persona_archetype: string;
+  category_weights: CategoryWeights;
+  source_type: string;
+  extraction_latency_seconds: number;
+}
+
+export interface SinglePersonaExtractionResponse {
+  filename: string;
+  is_success: boolean;
+  data?: PersonaExtractionResult | null;
+  error?: string | null;
+}
+
+export interface BatchPersonaResponse {
+  user_id: string;
+  results: SinglePersonaExtractionResponse[];
+  overall_latency_seconds: number;
+}
+
+export type FeedbackType = 'like' | 'dislike' | 'skip';
+
+export interface ArticleFeedbackRequest {
+  user_id: string;
+  /** Map of category name → weight in [0, 1]. Comes from the article itself. */
+  article_categories: Record<string, number>;
+  feedback: FeedbackType;
+}
+
+export interface ArticleFeedbackResponse {
+  user_id: string;
+  updated_categories: Record<string, number>;
+  message: string;
+}
+
+export type NewsletterExecutionMode = 'fast' | 'polished';
+
+export interface B2CNewsletterRequest {
+  user_id: string;
+  execution_mode?: NewsletterExecutionMode;
+}
+
+export interface B2CNewsletterResponse {
+  status: string;
+  html_content: string;
+  execution_path_taken: string[];
+}
+
+export interface B2BReportRequest {
+  user_id: string;
+}
+
+export interface B2BReportResponse {
+  user_id: string;
+  report: string;
+  status: string;
+}
+
+export interface IngestionBatchResponse {
+  status: string;
+  total_found: number;
+  saved_count: number;
+  start_time: string;
+  end_time: string;
+  processing_time_seconds: number;
+}
+
+/** Shape of a single ranked article returned by the search endpoint. */
+export interface RankedArticle {
+  cluster_id: string;
+  title: string;
+  summary?: string;
+  score: number;
+  cluster_size?: number;
+  categories?: Record<string, number>;
+  trend_status?: string | null;
+  [key: string]: unknown;
+}
+
+export interface RecommendationsResponse {
+  status: string;
+  results: RankedArticle[];
+  semantic_basis?: string;
+}
+
+export interface HealthResponse {
+  status: string;
+  app_name: string;
+  version: string;
+  environment: string;
+  snowflake_version: string;
+}
+
+// ============================================================================
+// System endpoints
+// ============================================================================
+
+export function pingLiveness(signal?: AbortSignal) {
+  return request<{ status: string }>('/livez', { method: 'GET', signal });
+}
+
+export function getHealth(signal?: AbortSignal) {
+  return request<HealthResponse>('/api/v1/health', { method: 'GET', signal });
+}
+
+// ============================================================================
+// Personas
+// ============================================================================
+
+/**
+ * Upload one or more PDFs (LinkedIn export, resume, etc.) and receive a
+ * structured persona back. The backend persists the winning persona to
+ * Snowflake as a side effect.
+ */
+export function extractPersonas(
+  userId: string,
+  files: File[],
+  signal?: AbortSignal,
+): Promise<BatchPersonaResponse> {
+  const fd = new FormData();
+  fd.append('user_id', userId);
+  for (const file of files) fd.append('files', file);
+  return request<BatchPersonaResponse>('/api/v1/personas/extract', {
+    method: 'POST',
+    formData: fd,
+    signal,
+  });
+}
+
+/** Record a like / dislike / skip signal against an article. */
+export function submitArticleFeedback(
+  payload: ArticleFeedbackRequest,
+  signal?: AbortSignal,
+): Promise<ArticleFeedbackResponse> {
+  return request<ArticleFeedbackResponse>('/api/v1/personas/feedback', {
+    method: 'POST',
+    json: payload,
+    signal,
+  });
+}
+
+// ============================================================================
+// Newsletter (B2C)
+// ============================================================================
+
+/** Trigger the B2C LangGraph and return the rendered HTML newsletter. */
+export function generateB2CNewsletter(
+  payload: B2CNewsletterRequest,
+  signal?: AbortSignal,
+): Promise<B2CNewsletterResponse> {
+  return request<B2CNewsletterResponse>('/api/v1/newsletter/b2c', {
+    method: 'POST',
+    json: payload,
+    signal,
+  });
+}
+
+// ============================================================================
+// B2B Intelligence
+// ============================================================================
+
+export function generateB2BReport(
+  payload: B2BReportRequest,
+  signal?: AbortSignal,
+): Promise<B2BReportResponse> {
+  return request<B2BReportResponse>('/api/v1/b2b/report', {
+    method: 'POST',
+    json: payload,
+    signal,
+  });
+}
+
+// ============================================================================
+// Search / recommendations
+// ============================================================================
+
+export function getRecommendations(
+  userId: string,
+  limit: number = 5,
+  signal?: AbortSignal,
+): Promise<RecommendationsResponse> {
+  return request<RecommendationsResponse>('/api/v1/search/recommendations', {
+    method: 'GET',
+    query: { user_id: userId, limit },
+    signal,
+  });
+}
+
+// ============================================================================
+// Ingestion / Dedup / Trend — admin / ops surface. Most app users never call
+// these; they're here so admin pages can fire off pipeline runs.
+// ============================================================================
+
+export function triggerRssIngestion(signal?: AbortSignal): Promise<IngestionBatchResponse> {
+  return request<IngestionBatchResponse>('/api/v1/ingestion/fetch-rss', {
+    method: 'POST',
+    signal,
+  });
+}
+
+export function runDeduplication(
+  limit: number = 1000,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  return request<unknown>('/api/v1/deduplication/process', {
+    method: 'POST',
+    query: { limit },
+    signal,
+  });
+}
+
+export function rankDailyTrends(signal?: AbortSignal): Promise<unknown> {
+  return request<unknown>('/api/v1/trend/rank', { method: 'POST', signal });
+}
