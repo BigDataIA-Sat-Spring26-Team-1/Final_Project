@@ -62,7 +62,7 @@ async def get_top_trends(
         description="Optional trend_status filter (BREAKING, TRENDING, VIRAL, …).",
     ),
     db: SnowflakeConnection = Depends(get_db_connection),
-) -> Dict[str, List[Dict[str, Any]]]:
+) -> Dict[str, Any]:  # noqa: the mixed shape (total:int, results:list) would trip FastAPI's response validation under a stricter annotation.
     """Return the top-N most-trending clusters from the last ranking pass.
 
     Ordered by ``final_trend_score`` descending so the highest-velocity stories
