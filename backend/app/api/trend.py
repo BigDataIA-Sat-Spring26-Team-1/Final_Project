@@ -92,29 +92,45 @@ async def get_top_trends(
     query += " ORDER BY final_trend_score DESC NULLS LAST LIMIT %s"
     params.append(limit)
 
+    # One try/except around the entire "read + serialise" path. Previously the
+    # list-comprehension sat outside the block, so any TypeError in row
+    # serialisation (datetime, Decimal, VARIANT) landed in FastAPI's global
+    # handler instead of the helpful HTTPException + structured log below.
     try:
         cur = db.cursor()
         cur.execute(query, tuple(params))
         cols = [c[0].lower() for c in cur.description]
         rows = [dict(zip(cols, row)) for row in cur.fetchall()]
-    except Exception as e:
-        logger.error("Trend read failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
 
-    results = [
-        {
-            "cluster_id": r["id"],
-            "title": r["primary_title"],
-            "summary": r["primary_summary"],
-            "trend_status": r["trend_status"],
-            "final_trend_score": float(r["final_trend_score"])
-            if r["final_trend_score"] is not None
-            else 0.0,
-            "cluster_size": int(r["cluster_size"]) if r["cluster_size"] is not None else 1,
-            "social_popularity_score": float(r["social_popularity_score"] or 0.0),
-            "categories": _safe_json(r["category_weights"]) or {},
-            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
-        }
-        for r in rows
-    ]
+        results: List[Dict[str, Any]] = []
+        for r in rows:
+            created_at = r.get("created_at")
+            # Snowflake TIMESTAMP_NTZ usually yields a datetime, but some driver
+            # paths hand back a string — handle both without crashing.
+            if hasattr(created_at, "isoformat"):
+                created_iso: Optional[str] = created_at.isoformat()
+            elif created_at is None:
+                created_iso = None
+            else:
+                created_iso = str(created_at)
+
+            results.append(
+                {
+                    "cluster_id": r["id"],
+                    "title": r["primary_title"],
+                    "summary": r["primary_summary"],
+                    "trend_status": r["trend_status"],
+                    "final_trend_score": float(r["final_trend_score"])
+                    if r["final_trend_score"] is not None
+                    else 0.0,
+                    "cluster_size": int(r["cluster_size"]) if r["cluster_size"] is not None else 1,
+                    "social_popularity_score": float(r["social_popularity_score"] or 0.0),
+                    "categories": _safe_json(r["category_weights"]) or {},
+                    "created_at": created_iso,
+                }
+            )
+    except Exception as e:
+        logger.error("Trend read failed", error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
+
     return {"total": len(results), "results": results}
