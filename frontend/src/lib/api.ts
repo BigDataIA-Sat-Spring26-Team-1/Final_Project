@@ -230,6 +230,25 @@ export interface HealthResponse {
   snowflake_version: string;
 }
 
+/** A single ranked story cluster as returned by GET /api/v1/trend/top. */
+export interface TrendCluster {
+  cluster_id: string;
+  title: string;
+  summary: string | null;
+  /** BREAKING / TRENDING / VIRAL / COMMUNITY-PICK / REGULAR / ... */
+  trend_status: string | null;
+  final_trend_score: number;
+  cluster_size: number;
+  social_popularity_score: number;
+  categories: Record<string, number>;
+  created_at: string | null;
+}
+
+export interface TrendTopResponse {
+  total: number;
+  results: TrendCluster[];
+}
+
 /** Returned by GET /api/v1/personas/{user_id}. */
 export interface StoredPersona {
   user_id: string;
@@ -371,4 +390,17 @@ export function runDeduplication(
 
 export function rankDailyTrends(signal?: AbortSignal): Promise<unknown> {
   return request<unknown>('/api/v1/trend/rank', { method: 'POST', signal });
+}
+
+/** Read the latest ranked trend snapshot for the frontend. */
+export function getTopTrends(
+  limit: number = 20,
+  status?: string,
+  signal?: AbortSignal,
+): Promise<TrendTopResponse> {
+  return request<TrendTopResponse>('/api/v1/trend/top', {
+    method: 'GET',
+    query: { limit, status },
+    signal,
+  });
 }
