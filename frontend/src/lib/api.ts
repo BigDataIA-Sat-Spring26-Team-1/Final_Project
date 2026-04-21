@@ -310,6 +310,7 @@ export interface BriefArchiveItem {
   brief_content: string;
   urgency_tier: string;
   created_at: string;
+  generated_at?: string;
 }
 
 export interface BriefArchiveResponse {

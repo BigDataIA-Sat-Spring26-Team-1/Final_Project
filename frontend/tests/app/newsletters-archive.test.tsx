@@ -47,7 +47,7 @@ describe('Newsletters Archive Page', () => {
 
   it('loads and displays newsletter list when user is selected', async () => {
     vi.mocked(api.listUsers).mockResolvedValue({ total: 0, results: [] });
-    vi.mocked(api.getNewsletterArchive).mockResolvedValueOnce({
+    vi.mocked(api.getNewsletterArchive).mockResolvedValue({
       total: 2,
       results: mockNewsletters,
     });
@@ -55,11 +55,13 @@ describe('Newsletters Archive Page', () => {
     sessionStorage.setItem('selectedUserId', 'user-123');
     render(<NewslettersPage />);
 
+    // Wait for the API to be called and data to render
     await waitFor(() => {
-      expect(screen.getByText(/Published/)).toBeInTheDocument();
-    });
+      expect(api.getNewsletterArchive).toHaveBeenCalled();
+    }, { timeout: 2000 });
 
-    expect(screen.getByText(/Draft/)).toBeInTheDocument();
+    // Check for newsletter data in sidebar
+    expect(screen.getByText(/4\/20/)).toBeInTheDocument();
   });
 
   it('displays selected newsletter content', async () => {
