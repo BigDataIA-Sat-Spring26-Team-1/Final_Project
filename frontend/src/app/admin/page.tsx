@@ -18,6 +18,7 @@ import {
 import { useEffect, useState } from 'react';
 
 import { ActivityItem, StatCard } from '@/components/DashboardComponents';
+import { AdminManagementPanel } from '@/components/AdminManagementPanel';
 import { PageWrapper } from '@/components/PageWrapper';
 import {
   ApiError,
@@ -110,6 +111,8 @@ export default function AdminDashboard() {
             icon={ShieldCheck}
           />
         </div>
+
+        <AdminManagementPanel />
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           <div className="space-y-6">
