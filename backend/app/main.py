@@ -2,28 +2,33 @@ import time
 import uuid
 import structlog
 import snowflake.connector
-from app.core.metrics import HTTP_REQUEST_DURATION
 
 from contextlib import asynccontextmanager
 
+from fastapi import Response
+from app.core.metrics import REGISTRY
 from fastapi.responses import JSONResponse
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi import FastAPI, Depends, HTTPException, Request
 
+from app.core.limiter import limiter
 from app.core.errors import ErrorResponse
 from app.db.qdrant import sync_vector_collections
 from app.core.config import Settings, get_settings
-from app.core.limiter import limiter
+from app.core.metrics import HTTP_REQUEST_DURATION
 from app.core.logging_conf import setup_logging, get_logger
-from app.api import personas, ingestion, deduplication, trend, search
+from app.api import personas, ingestion, deduplication, trend, search, b2b
 from app.db.snowflake import get_db_connection, sync_database_schema
 
 from slowapi.errors import RateLimitExceeded
 from slowapi import _rate_limit_exceeded_handler
 
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+
 
 setup_logging(get_settings().app_env)
 logger = get_logger("app")
@@ -123,6 +128,7 @@ app.include_router(ingestion.router, prefix="/api/v1/ingestion", tags=["Ingestio
 app.include_router(deduplication.router, prefix="/api/v1/deduplication", tags=["Deduplication"])
 app.include_router(trend.router, prefix="/api/v1/trend", tags=["Trend Engine"])
 app.include_router(search.router, prefix="/api/v1/search", tags=["Retrieval"])
+app.include_router(b2b.router, prefix="/api/v1/b2b", tags=["B2B Intelligence"])
 
 from app.api.newsletter import router as newsletter_router
 app.include_router(newsletter_router, prefix="/api/v1/newsletter", tags=["Newsletter Delivery"])
@@ -151,18 +157,13 @@ async def health_check(
         logger.error("Snowflake health check failed", exc_info=True)
         raise HTTPException(status_code=503, detail="Database connection failed")
 
-
-from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
-from app.core.metrics import REGISTRY
-from fastapi import Response
-
 @app.get("/metrics", tags=["System"])
 async def metrics():
     """Exposes all internal telemetry for Prometheus scraping."""
     return Response(content=generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
 
 
-# --- Task 23-25: MCP Integration ---
+# --- MCP Integration ---
 # Exposing CurateAI tools to the Model Context Protocol ecosystem.
 from app.core.mcp_server import mcp_server
 

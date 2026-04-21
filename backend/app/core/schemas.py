@@ -1,4 +1,5 @@
 from datetime import datetime
+from enum import Enum
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List, Literal
 
@@ -156,6 +157,37 @@ class IngestionBatchResponse(BaseModel):
     end_time: str
     processing_time_seconds: float
 
+
+# --- B2B Intelligence Report Models ---
+
+class B2BReportRequest(BaseModel):
+    user_id: str = Field(..., description="Corporate client identifier.")
+
+class B2BReportResponse(BaseModel):
+    user_id: str
+    report: str
+    status: str
+
+
+# --- Behavioral Refinement Models ---
+
+class FeedbackType(str, Enum):
+    like = "like"
+    dislike = "dislike"
+    skip = "skip"
+
+class ArticleFeedbackRequest(BaseModel):
+    user_id: str = Field(..., description="The user providing feedback.")
+    article_categories: Dict[str, float] = Field(
+        ...,
+        description="Category weights for the article (e.g. {'llms': 0.8, 'security': 0.2})."
+    )
+    feedback: FeedbackType
+
+class ArticleFeedbackResponse(BaseModel):
+    user_id: str
+    updated_categories: Dict[str, float]
+    message: str
 # --- Newsletter Agent Models ---
 
 class B2CNewsletterRequest(BaseModel):
