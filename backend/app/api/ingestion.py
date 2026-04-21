@@ -15,39 +15,34 @@ logger = get_logger("app.api.ingestion")
 router = APIRouter()
 
 
-@router.post("/fetch-rss", response_model=IngestionBatchResponse)
+@router.post("/fetch-rss", status_code=202)
 @limiter.limit("2/minute")
-async def trigger_rss_ingestion(request: Request, db: SnowflakeConnection = Depends(get_db_connection)):
-    """Triggers a full ingestion run across all registered RSS, ArXiv, and HackerNews sources.
+async def trigger_rss_ingestion(request: Request):
+    """Triggers the Airflow DAG for ingestion via its REST API."""
+    logger.info("Manual RSS ingestion triggered via API")
 
-    Fetches articles published within the last 26 hours and persists new ones to Snowflake
-    using URL-based deduplication (MERGE). Rate-limited to 2 calls per minute to protect
-    against accidental repeated triggers.
-    """
-    start_perf = time.perf_counter()
-    logger.info("Manual RSS ingestion triggered")
-
+    import httpx
     try:
-        articles = await IngestionService.fetch_all_sources()
-        saved_count = ArticleRepository.upsert_raw_articles(db, articles)
+        # Defaults to airflow docker service if run inside composed network, 
+        # or localhost for local testing. We assume airflow is running.
+        airflow_url = "http://localhost:8080/api/v1/dags/ingestion_dag/dagRuns"
+        async with httpx.AsyncClient() as client:
+            # We mock auth here assuming default admin:admin setup in dev.
+            resp = await client.post(
+                airflow_url, 
+                json={}, 
+                auth=("admin", "admin")
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            run_id = data.get("dag_run_id", "unknown_run_id")
 
-        # Task 18: Invalidate all archetype caches since new news is available
-        if saved_count > 0:
-            INTERNAL_CACHE.clear()
-            logger.info("Global newsletter cache invalidated due to new ingestion")
-
-        duration = time.perf_counter() - start_perf
-        y_start, y_end = IngestionService._get_yesterday_range()
-
-        return IngestionBatchResponse(
-            status="SUCCESS",
-            total_found=len(articles),
-            saved_count=saved_count,
-            start_time=y_start.isoformat(),
-            end_time=y_end.isoformat(),
-            processing_time_seconds=round(duration, 2)
-        )
+        return {
+            "status": "ACCEPTED",
+            "message": "Ingestion DAG triggered successfully",
+            "run_id": run_id
+        }
 
     except Exception as e:
         logger.error("Ingestion endpoint failure", error=str(e))
-        raise HTTPException(status_code=500, detail=f"Ingestion failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to trigger Airflow DAG: {str(e)}")

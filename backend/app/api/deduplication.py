@@ -10,48 +10,30 @@ logger = get_logger("app.api.deduplication")
 router = APIRouter()
 
 
-@router.post("/process")
-async def run_deduplication(limit: int = 1000, db: SnowflakeConnection = Depends(get_db_connection)):
-    """Runs the semantic deduplication pipeline on unclustered articles.
+@router.post("/process", status_code=202)
+async def run_deduplication():
+    """Runs the semantic deduplication DAG via Airflow."""
+    logger.info("Deduplication DAG triggered via API")
 
-    Groups raw articles into story clusters using URL normalization and
-    sentence-transformer embeddings. Each cluster represents one unique news event.
-    """
-    logger.info("Deduplication triggered", limit=limit)
-
+    import httpx
     try:
-        raw_articles = ArticleRepository.get_unclustered_articles(db, limit=limit)
-        if not raw_articles:
-            return {
-                "status": "SKIPPED",
-                "message": "No new unclustered articles found",
-                "clusters_created": 0
-            }
-
-        raw_clusters = await DeduplicationService.process_batch(raw_articles)
-        stories = [DeduplicationService.synthesize_story(c) for c in raw_clusters]
-        cluster_ids = ArticleRepository.create_clusters_batch(db, stories)
-
-        linkage_data = [
-            {"cluster_id": cluster_ids[i], "article_ids": story["article_ids"]}
-            for i, story in enumerate(stories)
-        ]
-        ArticleRepository.link_articles_to_clusters_bulk(db, linkage_data)
-
-        clusters_created = len(cluster_ids)
-        articles_linked = sum(len(s["article_ids"]) for s in stories)
-
-        logger.info("Deduplication complete",
-                    clusters_created=clusters_created,
-                    articles_linked=articles_linked)
+        airflow_url = "http://localhost:8080/api/v1/dags/deduplication_dag/dagRuns"
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                airflow_url, 
+                json={}, 
+                auth=("admin", "admin")
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            run_id = data.get("dag_run_id", "unknown_run_id")
 
         return {
-            "status": "SUCCESS",
-            "clusters_created": clusters_created,
-            "articles_processed": articles_linked,
-            "message": f"Created {clusters_created} story clusters from {articles_linked} articles"
+            "status": "ACCEPTED",
+            "message": "Deduplication DAG triggered successfully",
+            "run_id": run_id
         }
 
     except Exception as e:
-        logger.error("Deduplication failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Deduplication failed to trigger", error=str(e))
+        raise HTTPException(status_code=500, detail=f"Failed to trigger Airflow DAG: {str(e)}")
