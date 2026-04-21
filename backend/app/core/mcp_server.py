@@ -6,6 +6,9 @@ from app.core.schemas import B2CNewsletterRequest
 from app.db.snowflake import get_db_connection
 from app.repository.persona import PersonaRepository
 from app.core.logging_conf import get_logger
+from app.services.search import SearchService
+from app.services.trend import TrendService
+from app.services.b2b_agent import get_b2b_report_graph
 
 logger = get_logger("app.mcp_server")
 
@@ -48,4 +51,60 @@ async def get_user_archetype(user_id: str) -> str:
             next(db_gen)
         except StopIteration:
             pass
+
+@mcp_server.tool()
+async def filter_articles(user_id: str, category: str, limit: int = 5) -> str:
+    """
+    Retrieves personalized recommended articles for a user.
+    'category' filter is currently advisory as search is persona-driven.
+    """
+    db_gen = get_db_connection()
+    db = next(db_gen)
+    try:
+        recommendations = await SearchService.get_personalized_recommendations(user_id, limit, db)
+        if not recommendations:
+            return f"No recommendations found for user {user_id}"
+        return f"Top recommendations for {user_id}: {str(recommendations.get('results', []))}"
+    except Exception as e:
+        return f"Error filtering articles: {str(e)}"
+    finally:
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
+
+@mcp_server.tool()
+async def get_keyword_trends(company_id: str, time_window: str = "24h") -> str:
+    """
+    Analyzes global cluster updates to rank breaking trends.
+    'company_id' and 'time_window' are advisory for future scoped filtering.
+    """
+    db_gen = get_db_connection()
+    db = next(db_gen)
+    try:
+        results = await TrendService.rank_daily_clusters(db)
+        return f"Daily trend ranking complete. Processed {results.get('processed', 0)} clusters."
+    except Exception as e:
+        return f"Error fetching trends: {str(e)}"
+    finally:
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
+
+@mcp_server.tool()
+async def generate_b2b_brief(user_id: str) -> str:
+    """
+    Invokes the B2B Reporting LangGraph to generate an enterprise-level intelligence brief.
+    """
+    try:
+        graph = get_b2b_report_graph()
+        result = await graph.ainvoke({"user_id": user_id})
+        return str(result.get("generated_content", "No content generated."))
+    except Exception as e:
+        return f"Error generating B2B brief: {str(e)}"
+
+if __name__ == "__main__":
+    # Allows the server to be run standalone for ecosystem debugging
+    mcp_server.run()
 

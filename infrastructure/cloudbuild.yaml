@@ -36,7 +36,7 @@ steps:
       - "us-east1-docker.pkg.dev/$PROJECT_ID/curateai/mcp-server:latest"
       - "-f"
       - "mcp_server/Dockerfile"
-      - "mcp_server"
+      - "."
 
   # ── Push All Images ──
   - name: "gcr.io/cloud-builders/docker"
