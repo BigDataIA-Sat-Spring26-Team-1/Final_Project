@@ -94,40 +94,31 @@ export function AdminManagementPanel() {
     }
   };
 
+  const tabClass = (active: boolean) =>
+    `px-4 py-2 font-medium transition border-b-2 ${
+      active
+        ? 'border-secondary text-secondary'
+        : 'border-transparent text-dim hover:text-white'
+    }`;
+
+  const inputClass =
+    'w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-white placeholder-white/30 focus:ring-2 focus:ring-secondary/40 focus:border-secondary/40 outline-none';
+
+  const labelClass = 'block text-sm font-medium text-dim mb-2';
+
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 p-8">
-      <h2 className="text-2xl font-bold text-slate-900 mb-6">Admin Management</h2>
+    <div className="glass rounded-3xl border border-white/5 p-8">
+      <h2 className="text-2xl font-bold mb-6">Admin Management</h2>
 
       {/* Tabs */}
-      <div className="flex gap-4 mb-6 border-b border-slate-200">
-        <button
-          onClick={() => setActiveTab('user')}
-          className={`px-4 py-2 font-medium transition border-b-2 ${
-            activeTab === 'user'
-              ? 'border-blue-600 text-blue-600'
-              : 'border-transparent text-slate-600 hover:text-slate-900'
-          }`}
-        >
+      <div className="flex gap-4 mb-6 border-b border-white/10">
+        <button onClick={() => setActiveTab('user')} className={tabClass(activeTab === 'user')}>
           Create User
         </button>
-        <button
-          onClick={() => setActiveTab('company')}
-          className={`px-4 py-2 font-medium transition border-b-2 ${
-            activeTab === 'company'
-              ? 'border-blue-600 text-blue-600'
-              : 'border-transparent text-slate-600 hover:text-slate-900'
-          }`}
-        >
+        <button onClick={() => setActiveTab('company')} className={tabClass(activeTab === 'company')}>
           Create Company
         </button>
-        <button
-          onClick={() => setActiveTab('ingestion')}
-          className={`px-4 py-2 font-medium transition border-b-2 ${
-            activeTab === 'ingestion'
-              ? 'border-blue-600 text-blue-600'
-              : 'border-transparent text-slate-600 hover:text-slate-900'
-          }`}
-        >
+        <button onClick={() => setActiveTab('ingestion')} className={tabClass(activeTab === 'ingestion')}>
           Trigger Pipeline
         </button>
       </div>
@@ -138,38 +129,38 @@ export function AdminManagementPanel() {
         {activeTab === 'user' && (
           <div className="space-y-4">
             {userError && (
-              <div className="p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
-                <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
-                <p className="text-red-900">{userError}</p>
+              <div className="p-4 bg-rose-500/5 border border-rose-500/20 rounded-lg flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+                <p className="text-rose-200">{userError}</p>
               </div>
             )}
 
             {userSuccess && (
-              <div className="p-4 bg-green-50 border border-green-200 rounded-lg flex items-start gap-3">
-                <CheckCircle className="w-5 h-5 text-green-600 shrink-0 mt-0.5" />
-                <p className="text-green-900">User created successfully!</p>
+              <div className="p-4 bg-emerald-500/5 border border-emerald-500/20 rounded-lg flex items-start gap-3">
+                <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                <p className="text-emerald-200">User created successfully!</p>
               </div>
             )}
 
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">Email</label>
+              <label className={labelClass}>Email</label>
               <input
                 type="email"
                 value={userEmail}
                 onChange={e => setUserEmail(e.target.value)}
                 placeholder="user@example.com"
-                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                className={inputClass}
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">Full Name (optional)</label>
+              <label className={labelClass}>Full Name (optional)</label>
               <input
                 type="text"
                 value={userFullName}
                 onChange={e => setUserFullName(e.target.value)}
                 placeholder="John Doe"
-                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                className={inputClass}
               />
             </div>
 
@@ -197,49 +188,49 @@ export function AdminManagementPanel() {
         {activeTab === 'company' && (
           <div className="space-y-4">
             {companyError && (
-              <div className="p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
-                <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
-                <p className="text-red-900">{companyError}</p>
+              <div className="p-4 bg-rose-500/5 border border-rose-500/20 rounded-lg flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+                <p className="text-rose-200">{companyError}</p>
               </div>
             )}
 
             {companySuccess && (
-              <div className="p-4 bg-green-50 border border-green-200 rounded-lg flex items-start gap-3">
-                <CheckCircle className="w-5 h-5 text-green-600 shrink-0 mt-0.5" />
-                <p className="text-green-900">Company created successfully!</p>
+              <div className="p-4 bg-emerald-500/5 border border-emerald-500/20 rounded-lg flex items-start gap-3">
+                <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                <p className="text-emerald-200">Company created successfully!</p>
               </div>
             )}
 
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">Company Name</label>
+              <label className={labelClass}>Company Name</label>
               <input
                 type="text"
                 value={companyName}
                 onChange={e => setCompanyName(e.target.value)}
                 placeholder="Acme Corporation"
-                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                className={inputClass}
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">Domain (optional)</label>
+              <label className={labelClass}>Domain (optional)</label>
               <input
                 type="url"
                 value={companyDomain}
                 onChange={e => setCompanyDomain(e.target.value)}
                 placeholder="acme.com"
-                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                className={inputClass}
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">Industry (optional)</label>
+              <label className={labelClass}>Industry (optional)</label>
               <input
                 type="text"
                 value={companyIndustry}
                 onChange={e => setCompanyIndustry(e.target.value)}
                 placeholder="Technology, Finance, Healthcare"
-                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                className={inputClass}
               />
             </div>
 
@@ -267,21 +258,21 @@ export function AdminManagementPanel() {
         {activeTab === 'ingestion' && (
           <div className="space-y-4">
             {ingestionError && (
-              <div className="p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
-                <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
-                <p className="text-red-900">{ingestionError}</p>
+              <div className="p-4 bg-rose-500/5 border border-rose-500/20 rounded-lg flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+                <p className="text-rose-200">{ingestionError}</p>
               </div>
             )}
 
             {ingestionSuccess && (
-              <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+              <div className="p-4 bg-emerald-500/5 border border-emerald-500/20 rounded-lg">
                 <div className="flex items-start gap-3">
-                  <CheckCircle className="w-5 h-5 text-green-600 shrink-0 mt-0.5" />
+                  <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
                   <div>
-                    <p className="text-green-900 font-medium">Pipeline triggered successfully!</p>
-                    <p className="text-green-800 text-sm mt-1">{ingestionSuccess.message}</p>
+                    <p className="text-emerald-200 font-medium">Pipeline triggered successfully!</p>
+                    <p className="text-emerald-300/90 text-sm mt-1">{ingestionSuccess.message}</p>
                     {ingestionSuccess.started_at && (
-                      <p className="text-green-700 text-xs mt-1">
+                      <p className="text-emerald-300/70 text-xs mt-1">
                         Started: {new Date(ingestionSuccess.started_at).toLocaleString()}
                       </p>
                     )}
@@ -290,11 +281,11 @@ export function AdminManagementPanel() {
               </div>
             )}
 
-            <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
-              <p className="text-sm text-slate-700 mb-4">
+            <div className="p-4 bg-white/5 rounded-lg border border-white/10">
+              <p className="text-sm text-dim mb-4">
                 Trigger the RSS ingestion + URL-level deduplication pipeline. This will:
               </p>
-              <ul className="list-disc list-inside space-y-2 text-sm text-slate-600 mb-4">
+              <ul className="list-disc list-inside space-y-2 text-sm text-dim mb-4">
                 <li>Fetch articles from RSS, ArXiv, and HackerNews</li>
                 <li>Normalize URLs and detect duplicates</li>
                 <li>Save new articles to the database</li>
