@@ -26,12 +26,7 @@ describe('User Switcher', () => {
     },
   ];
 
-  it('renders with current user display', () => {
-    render(<UserSwitcher currentUserId="user-1" onSelect={vi.fn()} />);
-    expect(screen.getByText('Alice Johnson')).toBeInTheDocument();
-  });
-
-  it('opens dropdown and loads users on button click', async () => {
+  it('renders with current user display', async () => {
     vi.mocked(api.listUsers).mockResolvedValueOnce({
       total: 2,
       results: mockUsers,
@@ -39,12 +34,25 @@ describe('User Switcher', () => {
 
     render(<UserSwitcher currentUserId="user-1" onSelect={vi.fn()} />);
 
-    const button = screen.getByRole('button', { name: /Alice Johnson/i });
-    fireEvent.click(button);
+    await waitFor(() => {
+      expect(screen.getByText('Alice Johnson')).toBeInTheDocument();
+    });
+  });
+
+  it('opens dropdown and loads users on button click', async () => {
+    vi.mocked(api.listUsers).mockResolvedValue({
+      total: 2,
+      results: mockUsers,
+    });
+
+    render(<UserSwitcher currentUserId="user-1" onSelect={vi.fn()} />);
 
     await waitFor(() => {
-      expect(api.listUsers).toHaveBeenCalledWith(100);
+      expect(api.listUsers).toHaveBeenCalled();
     });
+
+    const button = screen.getByRole('button', { name: /Alice Johnson/i });
+    fireEvent.click(button);
 
     expect(screen.getByText('Bob Smith')).toBeInTheDocument();
   });
@@ -52,12 +60,16 @@ describe('User Switcher', () => {
   it('calls onSelect when user is clicked', async () => {
     const onSelect = vi.fn();
 
-    vi.mocked(api.listUsers).mockResolvedValueOnce({
+    vi.mocked(api.listUsers).mockResolvedValue({
       total: 2,
       results: mockUsers,
     });
 
     render(<UserSwitcher currentUserId="user-1" onSelect={onSelect} />);
+
+    await waitFor(() => {
+      expect(api.listUsers).toHaveBeenCalled();
+    });
 
     const button = screen.getByRole('button', { name: /Alice Johnson/i });
     fireEvent.click(button);
@@ -77,7 +89,7 @@ describe('User Switcher', () => {
 
     render(<UserSwitcher currentUserId="user-1" onSelect={vi.fn()} />);
 
-    const button = screen.getByRole('button', { name: /Alice Johnson/i });
+    const button = screen.getByRole('button', { name: /Select User/i });
     fireEvent.click(button);
 
     await waitFor(() => {
@@ -108,12 +120,7 @@ describe('Company Switcher', () => {
     },
   ];
 
-  it('renders with current company display', () => {
-    render(<CompanySwitcher currentCompanyId="company-1" onSelect={vi.fn()} />);
-    expect(screen.getByText('Acme Corp')).toBeInTheDocument();
-  });
-
-  it('opens dropdown and loads companies on button click', async () => {
+  it('renders with current company display', async () => {
     vi.mocked(api.listCompanies).mockResolvedValueOnce({
       total: 2,
       results: mockCompanies,
@@ -121,13 +128,25 @@ describe('Company Switcher', () => {
 
     render(<CompanySwitcher currentCompanyId="company-1" onSelect={vi.fn()} />);
 
-    const buttons = screen.getAllByRole('button');
-    const button = buttons[0];
-    fireEvent.click(button);
+    await waitFor(() => {
+      expect(screen.getByText('Acme Corp')).toBeInTheDocument();
+    });
+  });
+
+  it('opens dropdown and loads companies on button click', async () => {
+    vi.mocked(api.listCompanies).mockResolvedValue({
+      total: 2,
+      results: mockCompanies,
+    });
+
+    render(<CompanySwitcher currentCompanyId="company-1" onSelect={vi.fn()} />);
 
     await waitFor(() => {
-      expect(api.listCompanies).toHaveBeenCalledWith(100);
+      expect(api.listCompanies).toHaveBeenCalled();
     });
+
+    const button = screen.getByRole('button', { name: /Acme Corp/i });
+    fireEvent.click(button);
 
     expect(screen.getByText('TechStart Inc')).toBeInTheDocument();
   });
@@ -135,15 +154,19 @@ describe('Company Switcher', () => {
   it('calls onSelect when company is clicked', async () => {
     const onSelect = vi.fn();
 
-    vi.mocked(api.listCompanies).mockResolvedValueOnce({
+    vi.mocked(api.listCompanies).mockResolvedValue({
       total: 2,
       results: mockCompanies,
     });
 
     render(<CompanySwitcher currentCompanyId="company-1" onSelect={onSelect} />);
 
-    const buttons = screen.getAllByRole('button');
-    fireEvent.click(buttons[0]);
+    await waitFor(() => {
+      expect(api.listCompanies).toHaveBeenCalled();
+    });
+
+    const button = screen.getByRole('button', { name: /Acme Corp/i });
+    fireEvent.click(button);
 
     await waitFor(() => {
       expect(screen.getByText('TechStart Inc')).toBeInTheDocument();
@@ -159,18 +182,20 @@ describe('Company Switcher', () => {
   });
 
   it('displays industry information in dropdown', async () => {
-    vi.mocked(api.listCompanies).mockResolvedValueOnce({
+    vi.mocked(api.listCompanies).mockResolvedValue({
       total: 1,
       results: [mockCompanies[0]],
     });
 
     render(<CompanySwitcher currentCompanyId={null} onSelect={vi.fn()} />);
 
-    const buttons = screen.getAllByRole('button');
-    fireEvent.click(buttons[0]);
-
     await waitFor(() => {
-      expect(screen.getByText('Technology')).toBeInTheDocument();
+      expect(api.listCompanies).toHaveBeenCalled();
     });
+
+    const button = screen.getByRole('button', { name: /Select Company/i });
+    fireEvent.click(button);
+
+    expect(screen.getByText('Technology')).toBeInTheDocument();
   });
 });

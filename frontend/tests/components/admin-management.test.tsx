@@ -19,8 +19,9 @@ describe('Admin Management Panel', () => {
 
     it('requires email before submission', () => {
       render(<AdminManagementPanel />);
-      const createButton = screen.getByRole('button', { name: /Create User/i });
-      expect(createButton).toBeDisabled();
+      const buttons = screen.getAllByRole('button', { name: /Create User/i });
+      const submitButton = buttons[buttons.length - 1]; // Last "Create User" is the submit button
+      expect(submitButton).toBeDisabled();
     });
 
     it('creates user successfully and shows success message', async () => {
@@ -34,7 +35,8 @@ describe('Admin Management Panel', () => {
 
       const emailInput = screen.getByPlaceholderText('user@example.com');
       const nameInput = screen.getByPlaceholderText('John Doe');
-      const createButton = screen.getByRole('button', { name: /Create User/i });
+      const buttons = screen.getAllByRole('button', { name: /Create User/i });
+      const createButton = buttons[buttons.length - 1]; // Last "Create User" is the submit button
 
       fireEvent.change(emailInput, { target: { value: 'test@example.com' } });
       fireEvent.change(nameInput, { target: { value: 'John Doe' } });
@@ -54,7 +56,8 @@ describe('Admin Management Panel', () => {
       render(<AdminManagementPanel />);
 
       const emailInput = screen.getByPlaceholderText('user@example.com');
-      const createButton = screen.getByRole('button', { name: /Create User/i });
+      const buttons = screen.getAllByRole('button', { name: /Create User/i });
+      const createButton = buttons[buttons.length - 1]; // Last "Create User" is the submit button
 
       fireEvent.change(emailInput, { target: { value: 'test@example.com' } });
       fireEvent.click(createButton);
@@ -92,17 +95,16 @@ describe('Admin Management Panel', () => {
       });
 
       render(<AdminManagementPanel />);
-      const companyTab = screen.getByRole('button', { name: /Create Company/i });
+      const companyButtons = screen.getAllByRole('button', { name: /Create Company/i });
+      const companyTab = companyButtons[0]; // First is the tab
       fireEvent.click(companyTab);
 
       const nameInput = screen.getByPlaceholderText('Acme Corporation');
       fireEvent.change(nameInput, { target: { value: 'Acme Corp' } });
 
-      const buttons = screen.getAllByRole('button');
-      const createButton = buttons.find(btn => btn.textContent?.includes('Create Company'));
-      if (createButton) {
-        fireEvent.click(createButton);
-      }
+      const allButtons = screen.getAllByRole('button', { name: /Create Company/i });
+      const submitButton = allButtons[allButtons.length - 1]; // Last is the submit button
+      fireEvent.click(submitButton);
 
       await waitFor(() => {
         expect(api.createCompany).toHaveBeenCalled();

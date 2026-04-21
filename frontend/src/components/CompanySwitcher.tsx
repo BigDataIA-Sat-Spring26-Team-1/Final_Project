@@ -32,10 +32,8 @@ export function CompanySwitcher({ currentCompanyId, onSelect }: CompanySwitcherP
       }
     };
 
-    if (isOpen) {
-      fetchCompanies();
-    }
-  }, [isOpen]);
+    fetchCompanies();
+  }, []);
 
   const handleSelect = (companyId: string) => {
     onSelect(companyId);

@@ -262,6 +262,68 @@ export interface StoredPersona {
   behavioral_category_weights: Record<string, number>;
 }
 
+export interface UserListItem {
+  id: string;
+  email: string;
+  full_name: string | null;
+  created_at: string;
+}
+
+export interface UserListResponse {
+  total: number;
+  results: UserListItem[];
+}
+
+export interface CompanyListItem {
+  id: string;
+  name: string;
+  domain: string | null;
+  industry: string | null;
+  created_at: string;
+}
+
+export interface CompanyListResponse {
+  total: number;
+  results: CompanyListItem[];
+}
+
+export interface NewsletterArchiveItem {
+  id: string;
+  user_id: string;
+  edition_date: string;
+  status: string;
+  generated_at: string | null;
+  execution_path_taken: string | null;
+  final_content: string | null;
+  draft_content: string | null;
+}
+
+export interface NewsletterArchiveResponse {
+  total: number;
+  results: NewsletterArchiveItem[];
+}
+
+export interface BriefArchiveItem {
+  id: string;
+  company_id: string;
+  brief_date: string;
+  brief_content: string;
+  urgency_tier: string;
+  created_at: string;
+}
+
+export interface BriefArchiveResponse {
+  total: number;
+  results: BriefArchiveItem[];
+}
+
+export interface IngestionTriggerResponse {
+  status: string;
+  message: string;
+  started_at: string;
+  job_id: string | null;
+}
+
 // ============================================================================
 // System endpoints
 // ============================================================================
@@ -401,6 +463,144 @@ export function getTopTrends(
   return request<TrendTopResponse>('/api/v1/trend/top', {
     method: 'GET',
     query: { limit, status },
+    signal,
+  });
+}
+
+// ============================================================================
+// Admin — User/Company management
+// ============================================================================
+
+export function updateUserProfile(
+  userId: string,
+  fullName?: string,
+  jobTitle?: string,
+  seniority?: string,
+  bioSummary?: string,
+  linkedinUrl?: string,
+  signal?: AbortSignal,
+): Promise<{ user_id: string; status: string }> {
+  return request<{ user_id: string; status: string }>(
+    `/api/v1/admin/personas/${encodeURIComponent(userId)}`,
+    {
+      method: 'PUT',
+      json: {
+        full_name: fullName,
+        job_title: jobTitle,
+        seniority,
+        bio_summary: bioSummary,
+        linkedin_url: linkedinUrl,
+      },
+      signal,
+    },
+  );
+}
+
+export function updateCompanyProfile(
+  companyId: string,
+  name?: string,
+  domain?: string,
+  industry?: string,
+  description?: string,
+  companySize?: string,
+  signal?: AbortSignal,
+): Promise<{ company_id: string; status: string }> {
+  return request<{ company_id: string; status: string }>(
+    `/api/v1/admin/companies/${encodeURIComponent(companyId)}`,
+    {
+      method: 'PUT',
+      json: {
+        name,
+        domain,
+        industry,
+        description,
+        company_size: companySize,
+      },
+      signal,
+    },
+  );
+}
+
+export function createUser(
+  email: string,
+  fullName?: string,
+  signal?: AbortSignal,
+): Promise<{ id: string; email: string; status: string }> {
+  return request<{ id: string; email: string; status: string }>('/api/v1/admin/users', {
+    method: 'POST',
+    json: { email, full_name: fullName },
+    signal,
+  });
+}
+
+export function createCompany(
+  name: string,
+  domain?: string,
+  industry?: string,
+  description?: string,
+  companySize?: string,
+  signal?: AbortSignal,
+): Promise<{ id: string; name: string; status: string }> {
+  return request<{ id: string; name: string; status: string }>('/api/v1/admin/companies', {
+    method: 'POST',
+    json: { name, domain, industry, description, company_size: companySize },
+    signal,
+  });
+}
+
+export function listUsers(
+  limit: number = 50,
+  offset: number = 0,
+  signal?: AbortSignal,
+): Promise<UserListResponse> {
+  return request<UserListResponse>('/api/v1/admin/users', {
+    method: 'GET',
+    query: { limit, offset },
+    signal,
+  });
+}
+
+export function listCompanies(
+  limit: number = 50,
+  offset: number = 0,
+  signal?: AbortSignal,
+): Promise<CompanyListResponse> {
+  return request<CompanyListResponse>('/api/v1/admin/companies', {
+    method: 'GET',
+    query: { limit, offset },
+    signal,
+  });
+}
+
+export function getNewsletterArchive(
+  userId: string,
+  date?: string,
+  limit: number = 10,
+  signal?: AbortSignal,
+): Promise<NewsletterArchiveResponse> {
+  return request<NewsletterArchiveResponse>('/api/v1/admin/newsletters/archive', {
+    method: 'GET',
+    query: { user_id: userId, date, limit },
+    signal,
+  });
+}
+
+export function getBriefArchive(
+  companyId: string,
+  date?: string,
+  limit: number = 10,
+  signal?: AbortSignal,
+): Promise<BriefArchiveResponse> {
+  return request<BriefArchiveResponse>('/api/v1/admin/briefs/archive', {
+    method: 'GET',
+    query: { company_id: companyId, date, limit },
+    signal,
+  });
+}
+
+export function triggerAdminIngestion(signal?: AbortSignal): Promise<IngestionTriggerResponse> {
+  return request<IngestionTriggerResponse>('/api/v1/admin/ingestion/trigger', {
+    method: 'POST',
     signal,
   });
 }

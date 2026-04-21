@@ -32,10 +32,8 @@ export function UserSwitcher({ currentUserId, onSelect }: UserSwitcherProps) {
       }
     };
 
-    if (isOpen) {
-      fetchUsers();
-    }
-  }, [isOpen]);
+    fetchUsers();
+  }, []);
 
   const handleSelect = (userId: string) => {
     onSelect(userId);

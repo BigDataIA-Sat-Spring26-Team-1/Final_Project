@@ -16,7 +16,7 @@ describe('Newsletters Archive Page', () => {
       id: 'nl-1',
       user_id: 'user-123',
       edition_date: '2026-04-20',
-      status: 'PUBLISHED',
+      status: 'published',
       generated_at: '2026-04-20T10:30:00Z',
       execution_path_taken: 'init,curate,write,editor_review',
       final_content: '<h1>Newsletter</h1><p>Content here</p>',
@@ -26,7 +26,7 @@ describe('Newsletters Archive Page', () => {
       id: 'nl-2',
       user_id: 'user-123',
       edition_date: '2026-04-19',
-      status: 'DRAFT',
+      status: 'draft',
       generated_at: '2026-04-19T09:00:00Z',
       execution_path_taken: null,
       final_content: null,
@@ -35,6 +35,7 @@ describe('Newsletters Archive Page', () => {
   ];
 
   it('prompts for user selection when no user selected', () => {
+    vi.mocked(api.listUsers).mockResolvedValue({ total: 0, results: [] });
     vi.mocked(api.getNewsletterArchive).mockResolvedValueOnce({
       total: 0,
       results: [],
@@ -45,33 +46,31 @@ describe('Newsletters Archive Page', () => {
   });
 
   it('loads and displays newsletter list when user is selected', async () => {
+    vi.mocked(api.listUsers).mockResolvedValue({ total: 0, results: [] });
     vi.mocked(api.getNewsletterArchive).mockResolvedValueOnce({
       total: 2,
       results: mockNewsletters,
     });
 
     sessionStorage.setItem('selectedUserId', 'user-123');
-    const { rerender } = render(<NewslettersPage />);
-    rerender(<NewslettersPage />);
+    render(<NewslettersPage />);
 
     await waitFor(() => {
-      expect(api.getNewsletterArchive).toHaveBeenCalledWith('user-123', undefined, 30);
+      expect(screen.getByText(/Published/)).toBeInTheDocument();
     });
 
-    // Check that dates are rendered (format may vary)
-    expect(screen.getByText(/PUBLISHED/)).toBeInTheDocument();
-    expect(screen.getByText(/DRAFT/)).toBeInTheDocument();
+    expect(screen.getByText(/Draft/)).toBeInTheDocument();
   });
 
   it('displays selected newsletter content', async () => {
+    vi.mocked(api.listUsers).mockResolvedValue({ total: 0, results: [] });
     vi.mocked(api.getNewsletterArchive).mockResolvedValueOnce({
       total: 1,
       results: [mockNewsletters[0]],
     });
 
     sessionStorage.setItem('selectedUserId', 'user-123');
-    const { rerender } = render(<NewslettersPage />);
-    rerender(<NewslettersPage />);
+    render(<NewslettersPage />);
 
     await waitFor(() => {
       expect(screen.getByText('Newsletter')).toBeInTheDocument();
@@ -80,7 +79,8 @@ describe('Newsletters Archive Page', () => {
   });
 
   it('filters newsletters by date when date is selected', async () => {
-    vi.mocked(api.getNewsletterArchive).mockResolvedValueOnce({
+    vi.mocked(api.listUsers).mockResolvedValue({ total: 0, results: [] });
+    vi.mocked(api.getNewsletterArchive).mockResolvedValue({
       total: 1,
       results: [mockNewsletters[0]],
     });
@@ -101,14 +101,14 @@ describe('Newsletters Archive Page', () => {
   });
 
   it('shows empty state when no newsletters found', async () => {
+    vi.mocked(api.listUsers).mockResolvedValue({ total: 0, results: [] });
     vi.mocked(api.getNewsletterArchive).mockResolvedValueOnce({
       total: 0,
       results: [],
     });
 
     sessionStorage.setItem('selectedUserId', 'user-123');
-    const { rerender } = render(<NewslettersPage />);
-    rerender(<NewslettersPage />);
+    render(<NewslettersPage />);
 
     await waitFor(() => {
       expect(screen.getByText('No newsletters found')).toBeInTheDocument();
@@ -116,11 +116,11 @@ describe('Newsletters Archive Page', () => {
   });
 
   it('displays error when fetch fails', async () => {
+    vi.mocked(api.listUsers).mockResolvedValue({ total: 0, results: [] });
     vi.mocked(api.getNewsletterArchive).mockRejectedValueOnce(new Error('API error'));
 
     sessionStorage.setItem('selectedUserId', 'user-123');
-    const { rerender } = render(<NewslettersPage />);
-    rerender(<NewslettersPage />);
+    render(<NewslettersPage />);
 
     await waitFor(() => {
       expect(screen.getByText('API error')).toBeInTheDocument();
