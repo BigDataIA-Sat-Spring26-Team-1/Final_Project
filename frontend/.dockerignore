@@ -1,0 +1,40 @@
+# Keep the Docker build context small. Everything below is excluded from
+# the `COPY . .` step in the Dockerfile.
+
+# --- VCS / editors ---
+.git
+.gitignore
+.vscode
+.idea
+.DS_Store
+
+# --- Dependencies we rebuild inside the image ---
+node_modules
+.pnp
+.pnp.*
+.yarn
+
+# --- Build output we rebuild inside the image ---
+.next
+out
+build
+*.tsbuildinfo
+next-env.d.ts
+
+# --- Env files (bake values via --build-arg, never via .env) ---
+.env
+.env.*
+!.env.local.example
+
+# --- Tooling caches ---
+.turbo
+coverage
+
+# --- Test surface not needed in the runtime image ---
+tests
+vitest.config.mts
+
+# --- Docs / meta ---
+*.md
+Dockerfile
+.dockerignore
