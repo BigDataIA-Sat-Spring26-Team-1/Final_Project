@@ -28,7 +28,10 @@ substitutions:
   _REPO: curateai
   _SERVICE: curateai-backend
   _RUNTIME_SA: curateai-backend-sa@gen-lang-client-0720834968.iam.gserviceaccount.com
-  _CORS_ORIGINS: http://localhost:3000
+  # Keep the deployed frontend URL as the default — otherwise every rebuild
+  # resets CORS_ORIGINS to localhost-only and breaks the production browser.
+  # Override via --substitutions for ad-hoc local testing.
+  _CORS_ORIGINS: https://curateai-frontend-sjhg7huf4q-uc.a.run.app,http://localhost:3000
 
   # Non-sensitive Snowflake identifiers. Change here (or via --substitutions)
   # when you move to a new warehouse / database.
@@ -96,8 +99,10 @@ steps:
       - --max-instances=5
       - --concurrency=40
       # Non-secret env vars. APP_ENV=prod flips logging to JSON for
-      # Cloud Logging and bumps log level to INFO.
-      - --set-env-vars=APP_ENV=prod,SNOWFLAKE_ACCOUNT=${_SNOWFLAKE_ACCOUNT},SNOWFLAKE_USER=${_SNOWFLAKE_USER},SNOWFLAKE_DATABASE=${_SNOWFLAKE_DATABASE},SNOWFLAKE_SCHEMA=${_SNOWFLAKE_SCHEMA},SNOWFLAKE_WAREHOUSE=${_SNOWFLAKE_WAREHOUSE},SNOWFLAKE_ROLE=${_SNOWFLAKE_ROLE},QDRANT_URL=${_QDRANT_URL},CORS_ORIGINS=${_CORS_ORIGINS}
+      # Cloud Logging and bumps log level to INFO. The `^|^` prefix tells
+      # gcloud to use `|` as the separator between vars, so the comma inside
+      # CORS_ORIGINS (multiple origins) is taken literally.
+      - --set-env-vars=^|^APP_ENV=prod|SNOWFLAKE_ACCOUNT=${_SNOWFLAKE_ACCOUNT}|SNOWFLAKE_USER=${_SNOWFLAKE_USER}|SNOWFLAKE_DATABASE=${_SNOWFLAKE_DATABASE}|SNOWFLAKE_SCHEMA=${_SNOWFLAKE_SCHEMA}|SNOWFLAKE_WAREHOUSE=${_SNOWFLAKE_WAREHOUSE}|SNOWFLAKE_ROLE=${_SNOWFLAKE_ROLE}|QDRANT_URL=${_QDRANT_URL}|CORS_ORIGINS=${_CORS_ORIGINS}
       # Secrets pulled from Secret Manager at container start. Format:
       # ENV_VAR_NAME=SECRET_NAME:VERSION (":latest" always follows the newest).
       - --set-secrets=SECRET_KEY=SECRET_KEY:latest,SNOWFLAKE_PASSWORD=SNOWFLAKE_PASSWORD:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest
