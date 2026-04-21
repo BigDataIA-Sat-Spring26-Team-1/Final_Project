@@ -1,16 +1,9 @@
 [project]
-name = &quot;curateai-backend&quot;
-version = &quot;1.0.0&quot;
-description = &quot;CurateAI Intelligence API&quot;
-requires-python = &quot;&gt;=3.10&quot;
+name = "curateai-backend"
+version = "1.0.0"
+description = "CurateAI Intelligence API"
+requires-python = ">=3.10"
 dependencies = [
-&quot;fastapi&gt;=0.110.0&quot;,
-&quot;uvicorn&gt;=0.29.0&quot;,
-&quot;pydantic&gt;=2.7.0&quot;,
-&quot;pydantic-settings&gt;=2.2.1&quot;,
-&quot;snowflake-connector-python&gt;=3.10.0&quot;,
-&quot;python-dotenv&gt;=1.0.1&quot;,
-&quot;structlog&gt;=24.1.0&quot;,
     "fastapi>=0.110.0",
     "uvicorn>=0.29.0",
     "pydantic>=2.7.0",
@@ -38,33 +31,19 @@ dependencies = [
     "mcp[fastapi]>=1.2.1",
 ]
 
-&quot;python-multipart&gt;=0.0.24&quot;,
-&quot;litellm&gt;=1.83.4&quot;,
-&quot;pdfplumber&gt;=0.11.4&quot;,
-&quot;pypdf&gt;=6.9.2&quot;,
-&quot;slowapi&gt;=0.1.9&quot;,
-&quot;tenacity&gt;=9.1.4&quot;,
-&quot;feedparser&gt;=6.0.12&quot;,
-&quot;python-dateutil&gt;=2.9.0.post0&quot;,
-&quot;scikit-learn&gt;=1.7.2&quot;,
-&quot;numpy&gt;=2.2.6&quot;,
-&quot;trafilatura&gt;=2.0.0&quot;,
-&quot;pandas&gt;=2.3.3&quot;,
-&quot;pyarrow&gt;=23.0.1&quot;,
-&quot;qdrant-client&gt;=1.17.1&quot;,
-&quot;langgraph&gt;=1.1.6&quot;,
-&quot;langchain-core&gt;=1.2.28&quot;,
-]
 [project.optional-dependencies]
 test = [
-&quot;pytest&gt;=8.0.0&quot;,
-&quot;pytest-asyncio&gt;=0.23.0&quot;,
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
 ]
+
 [build-system]
-requires = [&quot;hatchling&quot;]
-build-backend = &quot;hatchling.build&quot;
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [tool.hatch.build.targets.wheel]
-packages = [&quot;app&quot;]
+packages = ["app"]
+
 [tool.pytest.ini_options]
-asyncio_mode = &quot;auto&quot;
-testpaths = [&quot;tests&quot;]
+asyncio_mode = "auto"
+testpaths = ["tests"]
