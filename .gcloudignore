@@ -1,0 +1,71 @@
+# Files and folders excluded from `gcloud builds submit` tarballs.
+#
+# The default tarball is the entire repo (30k+ files, >1 GiB here) because
+# `gcloud` has no way to know which parts a given Dockerfile actually needs.
+# Trimming this list down to only what the backend OR frontend Dockerfile
+# reads cuts upload time by ~10x and stops the Cloud Build storage bucket
+# from accumulating a revision per file tree.
+#
+# Format matches .gitignore. Keep it in sync when new heavyweight dirs land.
+
+# --- Git metadata (hundreds of MB of object history) ---
+.git/
+.gitignore
+.gitattributes
+
+# --- Python local envs + caches ---
+**/.venv/
+**/venv/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.coverage
+**/htmlcov/
+
+# --- Node / Next.js ---
+# node_modules is ~500 MB and is fully rebuilt inside the Docker image
+# via `npm ci` — never needs to cross the wire.
+**/node_modules/
+**/.next/
+**/.turbo/
+**/out/
+**/build/
+**/coverage/
+**/*.tsbuildinfo
+
+# --- Editor / OS artefacts ---
+.DS_Store
+.vscode/
+.idea/
+
+# --- Env files: secrets live in Secret Manager; never ship via build context. ---
+.env
+.env.*
+!.env.example
+!**/.env.local.example
+!**/.env.example
+
+# --- Docs, research, prototypes — none of these are imported at runtime. ---
+# Everything under Temp/ (proposal PDFs, architecture image, tracking doc)
+# and Prototyping/ (validation notebooks + fixtures) is reference material.
+Temp/
+Prototyping/
+
+# --- Backend dev-only dirs not needed at build time ---
+backend/logs/
+backend/testing/
+# tests are kept for now so CI can run pytest in future; flip to `tests/` to exclude.
+
+# --- Local Docker dev artefacts ---
+docker-compose.override.yml
+
+# --- Large binary blobs that shouldn't live in git anyway ---
+*.iso
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+!**/uv.lock
