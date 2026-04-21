@@ -1,0 +1,119 @@
+# Cloud Build pipeline for the CurateAI backend Cloud Run service.
+#
+# Runs three steps:
+#   1. Docker build — uses backend/Dockerfile and caches the Python layer
+#      across builds via `--cache-from` against the "latest" tag.
+#   2. Docker push — publishes both :latest and the immutable :$BUILD_ID tag
+#      to Artifact Registry so we can roll back by revision if needed.
+#   3. Cloud Run deploy — updates the service with the new image, wires
+#      non-secret env vars inline and pulls secrets from Secret Manager.
+#
+# Usage (from repo root):
+#   gcloud builds submit --config infrastructure/backend.cloudbuild.yaml .
+#
+# Substitution variables (override with --substitutions=_KEY=value):
+#   _REGION         — Cloud Run region.
+#   _REPO           — Artifact Registry repository.
+#   _SERVICE        — Cloud Run service name.
+#   _RUNTIME_SA     — runtime service account that Cloud Run will run as.
+#   _CORS_ORIGINS   — comma-separated list of browser origins allowed to hit
+#                     the backend. Update after the frontend is deployed.
+#
+# The Snowflake identifiers are non-sensitive — they're baked into env vars
+# at deploy time. Secrets (passwords, API keys) live in Secret Manager and
+# are mounted at container start via --set-secrets.
+
+substitutions:
+  _REGION: us-central1
+  _REPO: curateai
+  _SERVICE: curateai-backend
+  _RUNTIME_SA: curateai-backend-sa@gen-lang-client-0720834968.iam.gserviceaccount.com
+  _CORS_ORIGINS: http://localhost:3000
+
+  # Non-sensitive Snowflake identifiers. Change here (or via --substitutions)
+  # when you move to a new warehouse / database.
+  _SNOWFLAKE_ACCOUNT: WEVFMJN-ZNC58287
+  _SNOWFLAKE_USER: AAKASHB12
+  _SNOWFLAKE_DATABASE: CURATE_AI
+  _SNOWFLAKE_SCHEMA: PUBLIC
+  _SNOWFLAKE_WAREHOUSE: BIG_DATA
+  _SNOWFLAKE_ROLE: ACCOUNTADMIN
+
+  # Qdrant Cloud URL (non-secret — the API key lives in Secret Manager).
+  _QDRANT_URL: https://ebb3f6d8-0853-45e8-bfb0-e990b6e31829.us-east4-0.gcp.cloud.qdrant.io
+
+steps:
+  # 1) Build with layer cache against the previous :latest image.
+  #    First-ever build on a fresh repo: the cache-from pull fails silently
+  #    and we just do a cold build — no manual bootstrap needed.
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        IMAGE="${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/backend"
+        docker pull "$${IMAGE}:latest" || true
+        docker build \
+          --cache-from "$${IMAGE}:latest" \
+          -t "$${IMAGE}:latest" \
+          -t "$${IMAGE}:$BUILD_ID" \
+          -f backend/Dockerfile \
+          backend
+
+  # 2) Push both tags.
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        IMAGE="${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/backend"
+        docker push "$${IMAGE}:latest"
+        docker push "$${IMAGE}:$BUILD_ID"
+
+  # 3) Deploy to Cloud Run. --set-env-vars fully replaces the env var set on
+  #    the service, so we list every non-secret knob here to keep deploys
+  #    declarative (no "drift from last deploy" surprises).
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/backend:$BUILD_ID
+      - --region=${_REGION}
+      - --platform=managed
+      - --service-account=${_RUNTIME_SA}
+      - --port=8080
+      - --allow-unauthenticated
+      - --cpu=1
+      - --memory=2Gi
+      - --cpu-boost
+      - --timeout=300
+      - --min-instances=0
+      - --max-instances=5
+      - --concurrency=40
+      # Non-secret env vars. APP_ENV=prod flips logging to JSON for
+      # Cloud Logging and bumps log level to INFO.
+      - --set-env-vars=APP_ENV=prod,SNOWFLAKE_ACCOUNT=${_SNOWFLAKE_ACCOUNT},SNOWFLAKE_USER=${_SNOWFLAKE_USER},SNOWFLAKE_DATABASE=${_SNOWFLAKE_DATABASE},SNOWFLAKE_SCHEMA=${_SNOWFLAKE_SCHEMA},SNOWFLAKE_WAREHOUSE=${_SNOWFLAKE_WAREHOUSE},SNOWFLAKE_ROLE=${_SNOWFLAKE_ROLE},QDRANT_URL=${_QDRANT_URL},CORS_ORIGINS=${_CORS_ORIGINS}
+      # Secrets pulled from Secret Manager at container start. Format:
+      # ENV_VAR_NAME=SECRET_NAME:VERSION (":latest" always follows the newest).
+      - --set-secrets=SECRET_KEY=SECRET_KEY:latest,SNOWFLAKE_PASSWORD=SNOWFLAKE_PASSWORD:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest
+
+# Push images to Artifact Registry (Cloud Build also retains a copy).
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/backend:latest
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/backend:$BUILD_ID
+
+# 1-hour timeout is plenty — the longest single-stage step here is the
+# initial dependency install (~2 minutes on a cold build).
+timeout: 3600s
+
+options:
+  # Cloud Build requires one of these three when a custom service account is
+  # used or logs are very large; CLOUD_LOGGING_ONLY keeps build output in
+  # Cloud Logging and avoids needing a staging GCS bucket.
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
