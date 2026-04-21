@@ -1,8 +1,24 @@
 from datetime import datetime, timedelta
+import asyncio
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
+def bootstrap_backend():
+    import sys
+    import subprocess
+    import os
+    if "/opt/airflow/backend" not in sys.path:
+        sys.path.insert(0, "/opt/airflow/backend")
+    
+    marker = "/tmp/curateai_synced_v3"
+    if not os.path.exists(marker):
+        print("Syncing pinned dependencies...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "/opt/airflow/backend"])
+        with open(marker, "w") as f:
+            f.write("done")
+
 def weekly_behavioral_rollup():
+    bootstrap_backend()
     import logging
     logger = logging.getLogger("airflow.task")
     logger.info("Performing behavioral rollup...")
@@ -24,7 +40,8 @@ with DAG(
     schedule_interval="@weekly",
     catchup=False,
 ) as dag:
+    
     task = PythonOperator(
         task_id="behavioral_refinement_dag_task",
-        python_callable=weekly_behavioral_rollup,
+        python_callable=weekly_behavioral_rollup
     )
