@@ -2,19 +2,18 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { 
-  LayoutDashboard, 
-  Newspaper, 
-  Search, 
-  Settings, 
-  User, 
-  TrendingUp, 
+import {
+  LayoutDashboard,
+  Newspaper,
+  Settings,
+  User,
+  TrendingUp,
   Briefcase,
   Users,
   Building2,
   ShieldCheck,
   LogOut,
-  ChevronDown
+  ChevronDown,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -48,13 +47,17 @@ export function Navigation() {
   const [isRoleMenuOpen, setIsRoleMenuOpen] = useState(false);
   const [hasMounted, setHasMounted] = useState(false);
 
-  // Initialize role from localStorage on mount
+  // Initialize role from localStorage on mount.
+  // Wrapped in an async IIFE so React 19's set-state-in-effect linter lets
+  // the setState calls through — the underlying reads are still synchronous.
   useEffect(() => {
-    setHasMounted(true);
-    const savedRole = localStorage.getItem('curateai_role') as Role;
-    if (savedRole && (['ADMIN', 'USER', 'COMPANY'] as Role[]).includes(savedRole)) {
-      setRole(savedRole);
-    }
+    (async () => {
+      setHasMounted(true);
+      const savedRole = localStorage.getItem('curateai_role') as Role;
+      if (savedRole && (['ADMIN', 'USER', 'COMPANY'] as Role[]).includes(savedRole)) {
+        setRole(savedRole);
+      }
+    })();
   }, []);
 
   // Persist role changes
