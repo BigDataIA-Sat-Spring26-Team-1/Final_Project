@@ -25,7 +25,7 @@ import { PageWrapper } from '@/components/PageWrapper';
 import {
   ApiError,
   triggerRssIngestion,
-  type IngestionBatchResponse,
+  type DAGTriggerResponse,
 } from '@/lib/api';
 
 export default function AdminNewslettersPage() {
@@ -33,7 +33,7 @@ export default function AdminNewslettersPage() {
   const [mode, setMode] = useState<'fast' | 'polished'>('polished');
 
   const [syncing, setSyncing] = useState(false);
-  const [syncResult, setSyncResult] = useState<IngestionBatchResponse | null>(null);
+  const [syncResult, setSyncResult] = useState<DAGTriggerResponse | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
 
   const handleForceSync = async () => {
@@ -92,37 +92,37 @@ export default function AdminNewslettersPage() {
           </div>
         )}
 
-        {/* Sync stats — real data when an ingestion has been run this session. */}
+        {/* Trigger handoff — the pipeline runs on Airflow, so the only fields
+            we have synchronously are the run id + status. Article counts land
+            in the scheduler logs once the DAG finishes. */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div className="glass rounded-[2rem] p-8 border border-white/5 space-y-2">
             <p className="text-[10px] font-black text-dim uppercase tracking-widest leading-none">
-              Last Sync · Articles Found
+              Last Trigger · Status
             </p>
-            <h3 className="text-3xl font-black">
-              {syncResult ? syncResult.total_found.toLocaleString() : '—'}
-            </h3>
+            <h3 className="text-3xl font-black">{syncResult?.status ?? '—'}</h3>
             <p className="text-xs text-emerald-400 font-bold">
-              {syncResult ? `${syncResult.saved_count} saved to Snowflake` : 'No sync triggered yet'}
+              {syncResult ? 'handed off to scheduler' : 'no trigger this session'}
             </p>
           </div>
           <div className="glass rounded-[2rem] p-8 border border-white/5 space-y-2 bg-secondary/5">
             <p className="text-[10px] font-black text-secondary uppercase tracking-widest leading-none">
-              Last Sync · Status
+              DAG · Run State
             </p>
-            <h3 className="text-3xl font-black">{syncResult?.status ?? '—'}</h3>
-            <p className="text-xs text-dim">
-              {syncResult ? `${syncResult.processing_time_seconds.toFixed(1)}s end-to-end` : 'awaiting first run'}
+            <h3 className="text-3xl font-black">{syncResult?.state ?? '—'}</h3>
+            <p className="text-xs text-dim font-mono truncate">
+              {syncResult?.dag_id ?? 'ingestion_dag'}
             </p>
           </div>
           <div className="glass rounded-[2rem] p-8 border border-white/5 space-y-2">
             <p className="text-[10px] font-black text-dim uppercase tracking-widest leading-none">
-              Sync Window
+              Run ID
             </p>
-            <h3 className="text-3xl font-black">
-              {syncResult ? formatRange(syncResult.start_time, syncResult.end_time) : '—'}
+            <h3 className="text-xl font-black break-all">
+              {syncResult?.dag_run_id ?? '—'}
             </h3>
             <p className="text-xs text-dim font-bold tracking-tighter">
-              26-hour ingestion window (overlap-safe)
+              Follow progress in the Airflow UI
             </p>
           </div>
         </div>
@@ -208,15 +208,3 @@ function PlaceholderRow({ index }: { index: number }) {
   );
 }
 
-// Convert the ISO timestamps from /ingestion/fetch-rss into a compact label
-// like "13:42 → 15:42" so it fits the stat-card slot without horizontal scroll.
-function formatRange(startIso: string, endIso: string): string {
-  const fmt = (iso: string) => {
-    try {
-      return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    } catch {
-      return iso;
-    }
-  };
-  return `${fmt(startIso)} → ${fmt(endIso)}`;
-}

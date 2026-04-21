@@ -124,10 +124,11 @@ describe('Admin Management Panel', () => {
 
     it('triggers ingestion pipeline and shows result', async () => {
       vi.mocked(api.triggerAdminIngestion).mockResolvedValueOnce({
-        status: 'accepted',
+        status: 'ACCEPTED',
         message: 'Pipeline started with 150 articles.',
-        started_at: '2026-04-21T12:00:00Z',
-        job_id: null,
+        dag_id: 'ingestion_dag',
+        dag_run_id: 'manual__2026-04-21T12:00:00+00:00',
+        state: 'queued',
       });
 
       render(<AdminManagementPanel />);
@@ -139,7 +140,7 @@ describe('Admin Management Panel', () => {
 
       await waitFor(() => {
         expect(api.triggerAdminIngestion).toHaveBeenCalled();
-        expect(screen.getByText('Pipeline triggered successfully!')).toBeInTheDocument();
+        expect(screen.getByText('Pipeline scheduled on Airflow.')).toBeInTheDocument();
         expect(screen.getByText('Pipeline started with 150 articles.')).toBeInTheDocument();
       });
     });

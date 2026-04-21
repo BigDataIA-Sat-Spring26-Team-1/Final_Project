@@ -318,12 +318,20 @@ export interface BriefArchiveResponse {
   results: BriefArchiveItem[];
 }
 
-export interface IngestionTriggerResponse {
+/** Shared response for every endpoint that kicks off an Airflow DAG. */
+export interface DAGTriggerResponse {
   status: string;
   message: string;
-  started_at: string;
-  job_id: string | null;
+  dag_id: string;
+  dag_run_id: string;
+  state?: string | null;
 }
+
+/**
+ * Back-compat alias — the admin UI still imports this name. The underlying
+ * shape is the DAG trigger response.
+ */
+export type IngestionTriggerResponse = DAGTriggerResponse;
 
 // ============================================================================
 // System endpoints
@@ -433,26 +441,22 @@ export function getRecommendations(
 // these; they're here so admin pages can fire off pipeline runs.
 // ============================================================================
 
-export function triggerRssIngestion(signal?: AbortSignal): Promise<IngestionBatchResponse> {
-  return request<IngestionBatchResponse>('/api/v1/ingestion/fetch-rss', {
+export function triggerRssIngestion(signal?: AbortSignal): Promise<DAGTriggerResponse> {
+  return request<DAGTriggerResponse>('/api/v1/ingestion/fetch-rss', {
     method: 'POST',
     signal,
   });
 }
 
-export function runDeduplication(
-  limit: number = 1000,
-  signal?: AbortSignal,
-): Promise<unknown> {
-  return request<unknown>('/api/v1/deduplication/process', {
+export function runDeduplication(signal?: AbortSignal): Promise<DAGTriggerResponse> {
+  return request<DAGTriggerResponse>('/api/v1/deduplication/process', {
     method: 'POST',
-    query: { limit },
     signal,
   });
 }
 
-export function rankDailyTrends(signal?: AbortSignal): Promise<unknown> {
-  return request<unknown>('/api/v1/trend/rank', { method: 'POST', signal });
+export function rankDailyTrends(signal?: AbortSignal): Promise<DAGTriggerResponse> {
+  return request<DAGTriggerResponse>('/api/v1/trend/rank', { method: 'POST', signal });
 }
 
 /** Read the latest ranked trend snapshot for the frontend. */
@@ -599,8 +603,8 @@ export function getBriefArchive(
   });
 }
 
-export function triggerAdminIngestion(signal?: AbortSignal): Promise<IngestionTriggerResponse> {
-  return request<IngestionTriggerResponse>('/api/v1/admin/ingestion/trigger', {
+export function triggerAdminIngestion(signal?: AbortSignal): Promise<DAGTriggerResponse> {
+  return request<DAGTriggerResponse>('/api/v1/admin/ingestion/trigger', {
     method: 'POST',
     signal,
   });

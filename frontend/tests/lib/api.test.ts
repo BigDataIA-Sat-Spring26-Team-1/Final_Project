@@ -134,17 +134,18 @@ describe('Trends', () => {
   });
 
   it('rankDailyTrends posts and returns the accepted payload', async () => {
-    const res = (await rankDailyTrends()) as { status: string };
-    expect(res.status).toBe('success');
+    const res = await rankDailyTrends();
+    expect(res.status).toBe('ACCEPTED');
+    expect(res.dag_id).toBe('trend_dag');
   });
 });
 
 describe('Ingestion', () => {
-  it('triggerRssIngestion returns IngestionBatchResponse', async () => {
+  it('triggerRssIngestion returns a DAG trigger handle', async () => {
     const res = await triggerRssIngestion();
-    expect(res.total_found).toBeGreaterThan(0);
-    expect(res.saved_count).toBeGreaterThan(0);
-    expect(res.start_time).toMatch(/^\d{4}-/);
+    expect(res.status).toBe('ACCEPTED');
+    expect(res.dag_id).toBe('ingestion_dag');
+    expect(res.dag_run_id).toMatch(/./);
   });
 });
 

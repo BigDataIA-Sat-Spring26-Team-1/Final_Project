@@ -193,24 +193,35 @@ export const handlers = [
 
   http.post(`${API}/api/v1/trend/rank`, () =>
     HttpResponse.json(
-      { status: 'success', message: 'Ranked 12 story clusters.', latency_seconds: 1.4 },
+      {
+        status: 'ACCEPTED',
+        message: 'Trend ranking DAG scheduled.',
+        dag_id: 'trend_dag',
+        dag_run_id: 'manual__2026-04-20T12:00:03+00:00',
+        state: 'queued',
+      },
       { status: 202 },
     ),
   ),
 
-  // ---- Ingestion / Dedup ----
+  // ---- Ingestion / Dedup (async via Airflow) ----
   http.post(`${API}/api/v1/ingestion/fetch-rss`, () =>
     HttpResponse.json({
-      status: 'OK',
-      total_found: 3129,
-      saved_count: 2987,
-      start_time: '2026-04-20T12:00:00Z',
-      end_time: '2026-04-20T14:00:00Z',
-      processing_time_seconds: 42.5,
+      status: 'ACCEPTED',
+      message: 'Ingestion DAG scheduled.',
+      dag_id: 'ingestion_dag',
+      dag_run_id: 'manual__2026-04-20T12:00:00+00:00',
+      state: 'queued',
     }),
   ),
 
   http.post(`${API}/api/v1/deduplication/process`, () =>
-    HttpResponse.json({ status: 'OK', merged: 42 }),
+    HttpResponse.json({
+      status: 'ACCEPTED',
+      message: 'Deduplication DAG scheduled.',
+      dag_id: 'deduplication_dag',
+      dag_run_id: 'manual__2026-04-20T12:00:01+00:00',
+      state: 'queued',
+    }),
   ),
 ];

@@ -1,0 +1,111 @@
+"""Thin Airflow REST client.
+
+The backend used to run ingestion / deduplication / ranking inline. Those
+pipelines now live in Airflow DAGs on a GCP VM — the backend just fires them
+off via the stable REST API and returns a run handle so the caller can poll
+for status if they want to.
+
+Everything here reads from ``app.core.config.Settings`` so the same image runs
+locally (http://localhost:8080) and in production (the VM's internal IP) with
+zero code changes.
+"""
+from __future__ import annotations
+
+from typing import Any, Dict, Optional
+
+import httpx
+
+from app.core.config import get_settings
+from app.core.logging_conf import get_logger
+
+logger = get_logger("app.core.airflow_client")
+
+
+class AirflowUnavailable(RuntimeError):
+    """Raised when AIRFLOW_HOST is missing or the scheduler is unreachable.
+
+    The API layer catches this and turns it into a 503 — we don't want a
+    Snowflake outage on the VM to look like a 500 from the backend.
+    """
+
+
+def _require_host() -> str:
+    host = get_settings().airflow_host.rstrip("/")
+    if not host:
+        raise AirflowUnavailable(
+            "AIRFLOW_HOST is not configured — the orchestrator is disabled."
+        )
+    return host
+
+
+async def trigger_dag(
+    dag_id: str,
+    conf: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Kick off a DAG run and return the run handle.
+
+    ``conf`` is forwarded to Airflow verbatim — DAGs read it via
+    ``dag_run.conf`` to parameterise per-user / per-company runs.
+    """
+    settings = get_settings()
+    host = _require_host()
+    url = f"{host}/api/v1/dags/{dag_id}/dagRuns"
+
+    payload: Dict[str, Any] = {}
+    if conf:
+        payload["conf"] = conf
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.airflow_request_timeout_seconds) as client:
+            resp = await client.post(
+                url,
+                json=payload,
+                auth=(settings.airflow_username, settings.airflow_password),
+            )
+    except httpx.HTTPError as exc:
+        logger.error("Airflow trigger failed at transport layer", dag_id=dag_id, error=str(exc))
+        raise AirflowUnavailable(f"Airflow unreachable: {exc}") from exc
+
+    if resp.status_code >= 400:
+        logger.error(
+            "Airflow rejected DAG trigger",
+            dag_id=dag_id,
+            status=resp.status_code,
+            body=resp.text[:500],
+        )
+        raise AirflowUnavailable(
+            f"Airflow returned {resp.status_code}: {resp.text[:200]}"
+        )
+
+    data = resp.json()
+    logger.info(
+        "Airflow DAG triggered",
+        dag_id=dag_id,
+        dag_run_id=data.get("dag_run_id"),
+        state=data.get("state"),
+    )
+    return data
+
+
+async def get_dag_run_status(dag_id: str, dag_run_id: str) -> Dict[str, Any]:
+    """Fetch the current state of a DAG run (queued / running / success / failed)."""
+    settings = get_settings()
+    host = _require_host()
+    url = f"{host}/api/v1/dags/{dag_id}/dagRuns/{dag_run_id}"
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.airflow_request_timeout_seconds) as client:
+            resp = await client.get(
+                url,
+                auth=(settings.airflow_username, settings.airflow_password),
+            )
+    except httpx.HTTPError as exc:
+        raise AirflowUnavailable(f"Airflow unreachable: {exc}") from exc
+
+    if resp.status_code == 404:
+        raise AirflowUnavailable(f"Unknown dag_run_id '{dag_run_id}' for dag '{dag_id}'.")
+    if resp.status_code >= 400:
+        raise AirflowUnavailable(
+            f"Airflow returned {resp.status_code}: {resp.text[:200]}"
+        )
+    return resp.json()

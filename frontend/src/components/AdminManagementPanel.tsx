@@ -269,11 +269,12 @@ export function AdminManagementPanel() {
                 <div className="flex items-start gap-3">
                   <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
                   <div>
-                    <p className="text-emerald-200 font-medium">Pipeline triggered successfully!</p>
+                    <p className="text-emerald-200 font-medium">Pipeline scheduled on Airflow.</p>
                     <p className="text-emerald-300/90 text-sm mt-1">{ingestionSuccess.message}</p>
-                    {ingestionSuccess.started_at && (
-                      <p className="text-emerald-300/70 text-xs mt-1">
-                        Started: {new Date(ingestionSuccess.started_at).toLocaleString()}
+                    {ingestionSuccess.dag_run_id && (
+                      <p className="text-emerald-300/70 text-xs mt-1 font-mono">
+                        {ingestionSuccess.dag_id} · run {ingestionSuccess.dag_run_id}
+                        {ingestionSuccess.state ? ` · ${ingestionSuccess.state}` : ''}
                       </p>
                     )}
                   </div>

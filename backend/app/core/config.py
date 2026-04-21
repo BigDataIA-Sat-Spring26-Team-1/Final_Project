@@ -76,6 +76,18 @@ class Settings(BaseSettings):
     trend_community_pick_social_benchmark: int = 150
     trend_cluster_min_size: int = 3
 
+    # ---- Airflow (orchestrator) ------------------------------------------------
+    # The backend no longer runs the heavy pipelines inline — it delegates to the
+    # Airflow scheduler living on a GCP VM and returns 202 Accepted.
+    #   AIRFLOW_HOST     full base URL, e.g. http://10.128.0.5:8080
+    #   AIRFLOW_USERNAME / AIRFLOW_PASSWORD basic-auth credentials
+    # Empty host => feature is disabled; endpoints will return 503 so the UI
+    # can surface a clear "orchestrator offline" message instead of hanging.
+    airflow_host: str = ""
+    airflow_username: str = "admin"
+    airflow_password: str = "admin"
+    airflow_request_timeout_seconds: float = 10.0
+
     model_config = SettingsConfigDict(
         env_file=_REPO_ROOT_ENV,
         env_file_encoding="utf-8",

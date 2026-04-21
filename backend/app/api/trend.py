@@ -12,33 +12,36 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from snowflake.connector import SnowflakeConnection
 
+from app.core.airflow_client import AirflowUnavailable, trigger_dag
 from app.core.logging_conf import get_logger
+from app.core.schemas import DAGTriggerResponse
 from app.db.snowflake import get_db_connection
-from app.services.trend import TrendService
 
 logger = get_logger("app.api.trend")
 router = APIRouter()
 
 
-@router.post("/rank", status_code=202)
-async def rank_daily_news(db: SnowflakeConnection = Depends(get_db_connection)):
-    """Ranks all story clusters by editorial density and social signals.
+@router.post("/rank", status_code=202, response_model=DAGTriggerResponse)
+async def rank_daily_news() -> DAGTriggerResponse:
+    """Schedule the trend-ranking DAG.
 
-    Aggregates category weights from individual articles into cluster-level
-    intelligence, then assigns BREAKING / TRENDING / REGULAR status based on
-    how many independent sources confirmed the story.
+    The ranker runs on the VM so a long Snowflake query never blocks a Cloud
+    Run request. The DAG writes results back to ``article_clusters`` which the
+    /top endpoint reads directly.
     """
-    logger.info("Trend ranking requested")
+    logger.info("Trend ranking DAG trigger requested")
     try:
-        results = await TrendService.rank_daily_clusters(db)
-        return {
-            "status": "success",
-            "message": f"Ranked {results['processed']} story clusters.",
-            "latency_seconds": results.get("latency", 0),
-        }
-    except Exception as e:
-        logger.error("Trend ranking failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        run = await trigger_dag("trend_dag")
+    except AirflowUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    return DAGTriggerResponse(
+        status="ACCEPTED",
+        message="Trend ranking DAG scheduled.",
+        dag_id="trend_dag",
+        dag_run_id=run.get("dag_run_id", ""),
+        state=run.get("state"),
+    )
 
 
 def _safe_json(raw: Any) -> Optional[Dict[str, float]]:
