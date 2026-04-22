@@ -6,11 +6,14 @@ on:
   pull_request:
     branches: [main]
 
+# Build-only workflow: the `push: false` steps below mean we never actually
+# ship these images anywhere, so the tag is purely a local buildx label.
+# Using a plain "curateai/..." tag keeps the workflow green even when
+# GCP_PROJECT_ID isn't configured as a repo secret — which is the case on
+# this repo today because deploys go through Cloud Build, not GitHub Actions.
 env:
-  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-  GCP_REGION: us-east1
-  BACKEND_IMAGE: us-east1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/curateai/backend
-  AIRFLOW_IMAGE: us-east1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/curateai/airflow
+  BACKEND_IMAGE: curateai-backend
+  AIRFLOW_IMAGE: curateai-airflow
 
 jobs:
   build-backend:

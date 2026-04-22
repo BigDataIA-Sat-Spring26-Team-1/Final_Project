@@ -1,7 +1,18 @@
-version: '3.8'
+# CurateAI stack for a single GCP Compute Engine VM.
+#
+# Services:
+#   * qdrant            vector DB (local; prod points at Qdrant Cloud instead)
+#   * postgres          metadata DB for Airflow
+#   * airflow-init      one-shot init container (db migrate + admin user create)
+#   * airflow-webserver UI + REST API on :8080
+#   * airflow-scheduler the actual DAG runner
+#   * backend           FastAPI service (optional on the VM — usually runs on
+#                       Cloud Run; kept here for hermetic local dev)
+#
+# All runtime values (Snowflake creds, OpenAI key, admin password, Fernet key,
+# Airflow SQL conn string, …) flow from a single `.env` at the repo root. No
+# secrets in this file.
 
-# x-airflow-common: &airflow-common
-#   image: apache/airflow:2.9.1
 x-airflow-common: &airflow-common
   build:
     context: ..
@@ -9,88 +20,106 @@ x-airflow-common: &airflow-common
   env_file:
     - ../.env
   environment:
-    - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-    - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airflow
-    - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW_FERNET_KEY:-}
-    - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=true
-    - AIRFLOW__CORE__LOAD_EXAMPLES=false
-    - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth
-    - QDRANT_URL=http://qdrant:6333
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW_SQL_ALCHEMY_CONN:-postgresql+psycopg2://airflow:airflow@postgres/airflow}
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-}
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "false"
+    # The backend image path — DAGs prepend this to sys.path so they can
+    # ``from app.services.*`` without a pip install.
+    CURATEAI_BACKEND_PATH: /opt/airflow/backend
+    # NB: QDRANT_URL intentionally lives only in env_file (.env). Adding it
+    # here with ``${QDRANT_URL:-...}`` makes docker-compose interpolate
+    # against the host shell, which silently overrides env_file with the
+    # fallback when the shell var is unset.
   volumes:
     - ../airflow/dags:/opt/airflow/dags
     - ../airflow/logs:/opt/airflow/logs
     - ../airflow/plugins:/opt/airflow/plugins
-    - ../backend:/opt/airflow/backend
+    - ../backend:/opt/airflow/backend:ro
   depends_on:
     postgres:
       condition: service_healthy
-  restart: always
+  restart: unless-stopped
 
 services:
-  # --- Infrastructure ---
-
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.11.3
     container_name: curateai_qdrant
     ports:
       - "6333:6333"
       - "6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
-    restart: always
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:6333/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
   postgres:
     image: postgres:15
     container_name: curateai_airflow_postgres
     environment:
-      - POSTGRES_USER=airflow
-      - POSTGRES_PASSWORD=airflow
-      - POSTGRES_DB=airflow
+      POSTGRES_USER: ${POSTGRES_USER:-airflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-airflow}
+      POSTGRES_DB: ${POSTGRES_DB:-airflow}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "airflow"]
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER:-airflow}"]
       interval: 10s
       retries: 5
       start_period: 10s
-    restart: always
+    restart: unless-stopped
 
-  # --- FastAPI Backend ---
-
+  # -----------------------------------------------------------------
+  # FastAPI backend — only run this on the VM for all-in-one dev.
+  # Production backends live on Cloud Run.
+  # -----------------------------------------------------------------
   backend:
     build:
       context: ../backend
       dockerfile: Dockerfile
     container_name: curateai_backend
     ports:
-      - "8000:8000"
+      - "8000:8080"
     env_file:
       - ../.env
     environment:
-      - QDRANT_URL=http://qdrant:6333
+      AIRFLOW_HOST: http://airflow-webserver:8080
+      AIRFLOW_USERNAME: ${AIRFLOW_ADMIN_USERNAME:-admin}
+      AIRFLOW_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-admin}
     depends_on:
       - qdrant
-    restart: always
-    volumes:
-      - ../backend/logs:/app/logs
+    restart: unless-stopped
+    profiles: ["all-in-one"]
 
-  # --- Apache Airflow ---
-
+  # -----------------------------------------------------------------
+  # Airflow — scheduler + webserver + one-shot init.
+  # -----------------------------------------------------------------
   airflow-init:
     <<: *airflow-common
     container_name: curateai_airflow_init
     entrypoint: /bin/bash
+    # Double-dollar escapes ($$VAR) stop docker-compose from interpolating at
+    # YAML-parse time — bash inside the container resolves the vars against
+    # env_file values. Without the escape the defaults are used silently.
     command:
       - -c
       - |
-        airflow db migrate &&
+        set -euo pipefail
+        airflow db migrate
         airflow users create \
-          --username admin \
-          --password admin \
+          --username "$${AIRFLOW_ADMIN_USERNAME:-admin}" \
+          --password "$${AIRFLOW_ADMIN_PASSWORD:-admin}" \
           --firstname CurateAI \
           --lastname Admin \
           --role Admin \
-          --email admin@curateai.local
+          --email "$${AIRFLOW_ADMIN_EMAIL:-admin@curateai.local}"
     restart: "no"
 
   airflow-webserver:
@@ -104,7 +133,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 30s
+      start_period: 60s
     depends_on:
       airflow-init:
         condition: service_completed_successfully
@@ -113,6 +142,12 @@ services:
     <<: *airflow-common
     container_name: curateai_airflow_scheduler
     command: scheduler
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname $(hostname) || exit 1"]
+      interval: 60s
+      timeout: 20s
+      retries: 5
+      start_period: 60s
     depends_on:
       airflow-init:
         condition: service_completed_successfully
@@ -120,4 +155,3 @@ services:
 volumes:
   qdrant_data:
   postgres_data:
-

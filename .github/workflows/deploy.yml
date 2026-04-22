@@ -1,85 +1,49 @@
-name: Deploy
+name: deploy
+
+# Manual deploys to prod. GitHub Actions kicks Cloud Build — Cloud Build
+# handles the actual Docker build and Cloud Run update so this workflow is
+# really just a remote trigger.
+#
+# Requires the following repo secrets:
+#   GCP_PROJECT_ID        numeric or string id
+#   GCP_SA_KEY            JSON key for a service account with cloudbuild.builds.create
+#   BACKEND_URL           the Cloud Run backend URL baked into the frontend
 
 on:
-  push:
-    branches: [main]
-
-env:
-  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-  GCP_REGION: us-east1
-  BACKEND_IMAGE: us-east1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/curateai/backend
-  AIRFLOW_IMAGE: us-east1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/curateai/airflow
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Which service to deploy'
+        type: choice
+        options: [backend, frontend, both]
+        default: both
 
 jobs:
-  lint:
-    uses: ./.github/workflows/lint.yml
-    secrets: inherit
-
-  test:
-    uses: ./.github/workflows/test.yml
-    secrets: inherit
-
-  deploy-backend:
-    name: Deploy Backend to Cloud Run
-    needs: [lint, test]
+  deploy:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Authenticate to GCP
+      - id: auth
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-
-      - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker us-east1-docker.pkg.dev --quiet
-
-      - name: Build and push backend image
-        uses: docker/build-push-action@v5
+      - uses: google-github-actions/setup-gcloud@v2
         with:
-          context: ./backend
-          file: ./backend/Dockerfile
-          push: true
-          tags: |
-            ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
-            ${{ env.BACKEND_IMAGE }}:latest
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      - name: Deploy to Cloud Run
+      - name: Deploy backend
+        if: github.event.inputs.target == 'backend' || github.event.inputs.target == 'both'
         run: |
-          gcloud run deploy curateai-backend \
-            --image ${{ env.BACKEND_IMAGE }}:${{ github.sha }} \
-            --region ${{ env.GCP_REGION }} \
-            --platform managed \
-            --allow-unauthenticated \
-            --port 8000 \
-            --memory 2Gi \
-            --cpu 2 \
-            --min-instances 0 \
-            --max-instances 3 \
-            --set-secrets "\
-              SNOWFLAKE_ACCOUNT=SNOWFLAKE_ACCOUNT:latest,\
-              SNOWFLAKE_USER=SNOWFLAKE_USER:latest,\
-              SNOWFLAKE_PASSWORD=SNOWFLAKE_PASSWORD:latest,\
-              SNOWFLAKE_DATABASE=SNOWFLAKE_DATABASE:latest,\
-              SNOWFLAKE_SCHEMA=SNOWFLAKE_SCHEMA:latest,\
-              SNOWFLAKE_WAREHOUSE=SNOWFLAKE_WAREHOUSE:latest,\
-              SNOWFLAKE_ROLE=SNOWFLAKE_ROLE:latest,\
-              OPENAI_API_KEY=OPENAI_API_KEY:latest,\
-              QDRANT_API_KEY=QDRANT_API_KEY:latest,\
-              SECRET_KEY=SECRET_KEY:latest" \
-            --set-env-vars "\
-              APP_NAME=Curate AI,\
-              APP_VERSION=1.0.0,\
-              APP_ENV=production,\
-              DEBUG=False,\
-              LOG_LEVEL=INFO,\
-              EMBEDDING_MODEL_NAME=text-embedding-3-small,\
-              LLM_MODEL_NAME=gpt-4o-mini,\
-              QDRANT_URL=${{ secrets.QDRANT_URL }}"
+          gcloud builds submit \
+            --config=infrastructure/backend.cloudbuild.yaml \
+            .
+
+      - name: Deploy frontend
+        if: github.event.inputs.target == 'frontend' || github.event.inputs.target == 'both'
+        run: |
+          gcloud builds submit \
+            --config=infrastructure/frontend.cloudbuild.yaml \
+            --substitutions=_BACKEND_URL=${{ secrets.BACKEND_URL }} \
+            .
