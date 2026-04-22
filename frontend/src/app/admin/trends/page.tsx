@@ -33,15 +33,22 @@ type Row = {
   createdAt: string | null;
 };
 
-// Default the trend view to "all time" — explicit date filter lets admins
-// rewind to a specific historical window without dropping today's data.
+// Default the trend view to yesterday so the admin sees the most recent
+// completed ranking batch on page load. Clearing the picker falls back to
+// the all-time leaderboard (useful for "what's the biggest story ever").
 const ALL_TIME = '';
+
+function yesterdayIso(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
 
 export default function AdminTrendsPage() {
   const [trends, setTrends] = useState<TrendCluster[]>([]);
   const [filter, setFilter] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [date, setDate] = useState<string>(ALL_TIME);
+  const [date, setDate] = useState<string>(yesterdayIso());
 
   useEffect(() => {
     const controller = new AbortController();
