@@ -1,15 +1,20 @@
 from typing import Dict, Any
-from langgraph.graph import END
-from app.services.agent_base import create_base_graph, AgentState, BaseAgentService, track_node_latency
-from app.core.logging_conf import get_logger
 
+from langgraph.graph import END
+
+from app.core.logging_conf import get_logger
+from app.core.metrics import NEWSLETTER_REJECTIONS_TOTAL
 from app.db.snowflake import get_db_connection
-from app.services.search import SearchService
 from app.repository.persona import PersonaRepository
-from app.core.metrics import LANGGRAPH_NODE_LATENCY, NEWSLETTER_REJECTIONS_TOTAL
+from app.services.agent_base import (
+    AgentState,
+    BaseAgentService,
+    create_base_graph,
+    track_node_latency,
+)
+from app.services.search import SearchService
 
 logger = get_logger("app.services.b2c_agent")
-
 
 @track_node_latency
 async def initialize_state(state: AgentState) -> Dict[str, Any]:

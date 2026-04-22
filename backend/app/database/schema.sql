@@ -101,6 +101,8 @@ CREATE TABLE IF NOT EXISTS newsletters (
     final_content TEXT, -- Post-HITL approved clean HTML
     status VARCHAR(50) DEFAULT 'DRAFT', -- Transitions to 'NEEDS_REVISION', 'APPROVED', 'PUBLISHED'
     feedback_signal VARCHAR(50), -- 'THUMBS_UP', 'THUMBS_DOWN' -> feeds back into `behavioral_category_weights`
+    execution_path_taken VARCHAR(500), -- LangGraph node trace for observability / debugging
+    generated_at TIMESTAMP_NTZ, -- When the draft was produced by the agent
     created_at TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
     updated_at TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
 );
@@ -116,8 +118,12 @@ CREATE TABLE IF NOT EXISTS companies (
     name VARCHAR(255) NOT NULL,
     domain VARCHAR(255),
     industry VARCHAR(255),
-    authority_vectors VARIANT, -- Persistent stored vectors representing the company’s domain expertise for Cosine mapping
-    created_at TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+    description TEXT,
+    company_size VARCHAR(50), -- e.g., '1-10', '11-50', '51-200', '201-1000', '1000+'
+    created_by VARCHAR(36), -- The admin user who provisioned this tenant
+    authority_vectors VARIANT, -- Persistent stored vectors representing the company's domain expertise for Cosine mapping
+    created_at TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    updated_at TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
 );
 
 -- 8. Content Briefs (Generated SEO Assets)
@@ -125,11 +131,14 @@ CREATE TABLE IF NOT EXISTS companies (
 CREATE TABLE IF NOT EXISTS content_briefs (
     id VARCHAR(36) PRIMARY KEY,
     company_id VARCHAR(36) NOT NULL REFERENCES companies(id),
-    cluster_id VARCHAR(36) NOT NULL REFERENCES article_clusters(id),
+    cluster_id VARCHAR(36) REFERENCES article_clusters(id), -- Nullable: stand-alone briefs aren't always tied to a specific cluster
+    brief_date DATE, -- Business-day the brief addresses
+    brief_content TEXT, -- Markdown body rendered by the B2B agent
     urgency_tier VARCHAR(50), -- Output from the 4-signal algorithm: 'HIDDEN_GEM', 'ACT_NOW', 'MONITOR', 'SKIP'
     strategic_angle TEXT,
     target_keywords VARIANT, -- Extracted SpaCy NER outputs / matched opportunities
     structured_brief VARIANT, -- The Pydantic structured output array mapping Titles, Content Blocks, Internal Links
     status VARCHAR(50) DEFAULT 'GENERATED',
+    generated_at TIMESTAMP_NTZ, -- When the agent last produced this brief
     created_at TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
 );

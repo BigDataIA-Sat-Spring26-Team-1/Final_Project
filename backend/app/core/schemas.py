@@ -158,6 +158,20 @@ class IngestionBatchResponse(BaseModel):
     processing_time_seconds: float
 
 
+class DAGTriggerResponse(BaseModel):
+    """Shared response shape for every endpoint that fires an Airflow DAG.
+
+    The pipelines run async on the VM, so the backend only guarantees that the
+    run was accepted — callers can poll /admin/dag-runs/{dag_id}/{run_id} to
+    follow execution state.
+    """
+    status: str = Field(description="ACCEPTED once the scheduler has the run.")
+    message: str
+    dag_id: str
+    dag_run_id: str
+    state: Optional[str] = Field(default=None, description="queued / running / success / failed.")
+
+
 # --- B2B Intelligence Report Models ---
 
 class B2BReportRequest(BaseModel):

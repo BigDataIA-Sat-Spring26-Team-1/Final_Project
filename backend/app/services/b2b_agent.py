@@ -1,6 +1,11 @@
 from typing import Dict, Any
 from langgraph.graph import END
-from app.services.agent_base import create_base_graph, AgentState, BaseAgentService, track_node_latency
+from app.services.agent_base import (
+    AgentState,
+    BaseAgentService,
+    create_base_graph,
+    track_node_latency,
+)
 from app.core.logging_conf import get_logger
 
 from app.db.snowflake import get_db_connection

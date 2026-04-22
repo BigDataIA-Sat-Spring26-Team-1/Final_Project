@@ -18,7 +18,11 @@ class SearchService:
         Logic for retrieving personalized content for a user.
         Shared by the API and the Agents.
         """
-        # 1. Fetch User Weights from Snowflake
+        # 1. Fetch User Weights from Snowflake. When the id doesn't match a
+        # persona (e.g., B2B callers pass a company_id here) we fall back to
+        # deriving a query from the company profile instead of returning None —
+        # a corporate tenant should still get a semantic search even when no
+        # behavioural signal is captured for them yet.
         cur = db.cursor()
         cur.execute("""
             SELECT explicit_category_weights, behavioral_category_weights
@@ -26,25 +30,46 @@ class SearchService:
             WHERE user_id = %s
         """, (user_id,))
         row = cur.fetchone()
-        
-        if not row:
-            return None # Or raise specific error
-
-        explicit_weights = row[0]
-        behavioral_weights = row[1]
 
         explicit_w: dict = {}
         behavioral_w: dict = {}
-        if explicit_weights:
-            try:
-                explicit_w = json.loads(explicit_weights)
-            except (json.JSONDecodeError, TypeError):
-                pass
-        if behavioral_weights:
-            try:
-                behavioral_w = json.loads(behavioral_weights)
-            except (json.JSONDecodeError, TypeError):
-                pass
+        company_fallback: str | None = None
+
+        if row:
+            explicit_weights = row[0]
+            behavioral_weights = row[1]
+            if explicit_weights:
+                try:
+                    explicit_w = json.loads(explicit_weights)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            if behavioral_weights:
+                try:
+                    behavioral_w = json.loads(behavioral_weights)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        else:
+            # Maybe this id is actually a company. Build a query from its name
+            # + industry + description so the B2B agent gets real results.
+            cur.execute(
+                """
+                SELECT name, industry, description
+                FROM companies
+                WHERE id = %s
+                """,
+                (user_id,),
+            )
+            company_row = cur.fetchone()
+            if not company_row:
+                return None
+            company_fallback = " ".join(
+                str(v) for v in company_row if v
+            ).strip() or "enterprise AI technology"
+            logger.info(
+                "Persona not found; using company profile as semantic query",
+                user_id=user_id,
+                query=company_fallback[:120],
+            )
 
         # P4 blend: refined = explicit × 0.8 + behavioral × 0.2
         # Categories below 0.05 are pruned as noise.
@@ -55,7 +80,9 @@ class SearchService:
         }
         weights = {cat: w for cat, w in weights.items() if w >= 0.05}
 
-        if not weights:
+        if company_fallback:
+            search_query = company_fallback
+        elif not weights:
             search_query = "latest major technology industry news"
         else:
             top_cats = sorted(weights.items(), key=lambda x: x[1], reverse=True)
@@ -81,6 +108,8 @@ class SearchService:
                 "cluster_id": str(hit.id),
                 "score": round(hit.score, 4),
                 "title": hit.payload.get("title", ""),
+                "url": hit.payload.get("url", ""),
+                "summary": hit.payload.get("summary", ""),
                 "sources": hit.payload.get("sources", []),
                 "cluster_size": hit.payload.get("cluster_size", 1)
             })
