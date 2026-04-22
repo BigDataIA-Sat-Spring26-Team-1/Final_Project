@@ -104,7 +104,14 @@ async def get_top_trends(
         # created_at is a TIMESTAMP_NTZ; cast to DATE for an index-friendly compare.
         query += " AND CAST(created_at AS DATE) = %s"
         params.append(date)
-    query += " ORDER BY final_trend_score DESC NULLS LAST LIMIT %s"
+    # When a caller pins a date we want the highest-score clusters of that day
+    # first; with no date filter we bubble up the newest clusters (then score
+    # as a tiebreaker within the same batch). Without this, a demo user lands
+    # on months-old clusters that happened to accumulate the highest scores.
+    if date:
+        query += " ORDER BY final_trend_score DESC NULLS LAST LIMIT %s"
+    else:
+        query += " ORDER BY created_at DESC, final_trend_score DESC NULLS LAST LIMIT %s"
     params.append(limit)
 
     # One try/except around the entire "read + serialise" path. Previously the
