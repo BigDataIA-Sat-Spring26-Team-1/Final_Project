@@ -1,7 +1,10 @@
-from typing import TypedDict, List, Dict, Any
+from functools import wraps
+import time
+from typing import TypedDict, List, Dict, Any, Callable
 from langgraph.graph import StateGraph
 from app.services.llm_base import BaseLLMService
 from app.core.logging_conf import get_logger
+from app.core.metrics import LANGGRAPH_NODE_LATENCY
 
 logger = get_logger("app.services.agent_base")
 
@@ -58,3 +61,17 @@ def create_base_graph() -> StateGraph:
     ...
     """
     return StateGraph(AgentState)
+
+
+def track_node_latency(node_func: Callable):
+    """Decorator to record LangGraph node execution time into Prometheus."""
+    @wraps(node_func)
+    async def wrapper(state: AgentState, *args, **kwargs):
+        start = time.perf_counter()
+        result = await node_func(state, *args, **kwargs)
+        duration = time.perf_counter() - start
+
+        # Record to Prometheus
+        LANGGRAPH_NODE_LATENCY.labels(node_name=node_func.__name__).observe(duration)
+        return result
+    return wrapper
