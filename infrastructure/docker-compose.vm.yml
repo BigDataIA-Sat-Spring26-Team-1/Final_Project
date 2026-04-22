@@ -103,17 +103,21 @@ services:
     <<: *airflow-common
     container_name: curateai_airflow_init
     entrypoint: /bin/bash
+    # Double-dollar escapes ($$VAR) stop docker-compose from interpolating at
+    # YAML-parse time — bash inside the container resolves the vars against
+    # env_file values. Without the escape the defaults are used silently.
     command:
       - -c
       - |
-        airflow db migrate && \
+        set -euo pipefail
+        airflow db migrate
         airflow users create \
-          --username "${AIRFLOW_ADMIN_USERNAME:-admin}" \
-          --password "${AIRFLOW_ADMIN_PASSWORD:-admin}" \
+          --username "$${AIRFLOW_ADMIN_USERNAME:-admin}" \
+          --password "$${AIRFLOW_ADMIN_PASSWORD:-admin}" \
           --firstname CurateAI \
           --lastname Admin \
           --role Admin \
-          --email "${AIRFLOW_ADMIN_EMAIL:-admin@curateai.local}"
+          --email "$${AIRFLOW_ADMIN_EMAIL:-admin@curateai.local}"
     restart: "no"
 
   airflow-webserver:
