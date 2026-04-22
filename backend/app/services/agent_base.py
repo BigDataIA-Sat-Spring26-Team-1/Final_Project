@@ -1,9 +1,33 @@
-from typing import TypedDict, List, Dict, Any
+import time
+from functools import wraps
+from typing import TypedDict, List, Dict, Any, Callable
+
 from langgraph.graph import StateGraph
-from app.services.llm_base import BaseLLMService
+
 from app.core.logging_conf import get_logger
+from app.core.metrics import LANGGRAPH_NODE_LATENCY
+from app.services.llm_base import BaseLLMService
 
 logger = get_logger("app.services.agent_base")
+
+
+def track_node_latency(node_func: Callable) -> Callable:
+    """Record LangGraph node execution time as a Prometheus histogram.
+
+    Lives here (not in b2c_agent) so both B2B and B2C graphs share the same
+    decorator. The histogram is labeled with ``node_name`` which matches
+    the wrapped function's ``__name__`` so dashboards group by node type.
+    """
+    @wraps(node_func)
+    async def wrapper(state: "AgentState", *args, **kwargs):
+        start = time.perf_counter()
+        try:
+            return await node_func(state, *args, **kwargs)
+        finally:
+            LANGGRAPH_NODE_LATENCY.labels(node_name=node_func.__name__).observe(
+                time.perf_counter() - start
+            )
+    return wrapper
 
 class AgentState(TypedDict):
     """

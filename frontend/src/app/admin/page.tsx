@@ -19,11 +19,14 @@ import { useEffect, useState } from 'react';
 
 import { ActivityItem, StatCard } from '@/components/DashboardComponents';
 import { AdminManagementPanel } from '@/components/AdminManagementPanel';
+import { MetricsPanel } from '@/components/MetricsPanel';
 import { PageWrapper } from '@/components/PageWrapper';
 import {
   ApiError,
   getHealth,
   getTopTrends,
+  listCompanies,
+  listUsers,
   type HealthResponse,
   type TrendCluster,
 } from '@/lib/api';
@@ -32,6 +35,8 @@ export default function AdminDashboard() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
   const [trends, setTrends] = useState<TrendCluster[]>([]);
+  const [userTotal, setUserTotal] = useState<number | null>(null);
+  const [companyTotal, setCompanyTotal] = useState<number | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -45,9 +50,13 @@ export default function AdminDashboard() {
         return null;
       }),
       getTopTrends(5, undefined, controller.signal).catch(() => null),
-    ]).then(([h, t]) => {
+      listUsers(1, 0, controller.signal).catch(() => null),
+      listCompanies(1, 0, controller.signal).catch(() => null),
+    ]).then(([h, t, u, c]) => {
       setHealth(h);
       if (t) setTrends(t.results);
+      if (u) setUserTotal(u.total);
+      if (c) setCompanyTotal(c.total);
     });
     return () => controller.abort();
   }, []);
@@ -80,16 +89,16 @@ export default function AdminDashboard() {
           {/* TODO: wire to /api/v1/admin/users when endpoint lands. */}
           <StatCard
             title="Total B2C Users"
-            value="—"
-            change="0"
-            description="Pending /admin/users endpoint"
+            value={userTotal !== null ? String(userTotal) : '—'}
+            change={userTotal !== null ? `+${userTotal}` : '0'}
+            description="Count from /admin/users"
             icon={Users}
           />
           <StatCard
             title="Total B2B Entities"
-            value="—"
-            change="0"
-            description="Pending /admin/companies endpoint"
+            value={companyTotal !== null ? String(companyTotal) : '—'}
+            change={companyTotal !== null ? `+${companyTotal}` : '0'}
+            description="Count from /admin/companies"
             icon={Building2}
           />
           <StatCard
@@ -113,6 +122,8 @@ export default function AdminDashboard() {
         </div>
 
         <AdminManagementPanel />
+
+        <MetricsPanel />
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           <div className="space-y-6">

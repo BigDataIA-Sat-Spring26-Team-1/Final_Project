@@ -11,12 +11,14 @@ zero code changes.
 """
 from __future__ import annotations
 
+import time
 from typing import Any, Dict, Optional
 
 import httpx
 
 from app.core.config import get_settings
 from app.core.logging_conf import get_logger
+from app.core.metrics import DAG_TRIGGER_LATENCY, DAG_TRIGGERS_TOTAL
 
 logger = get_logger("app.core.airflow_client")
 
@@ -55,6 +57,7 @@ async def trigger_dag(
     if conf:
         payload["conf"] = conf
 
+    start = time.perf_counter()
     try:
         async with httpx.AsyncClient(timeout=settings.airflow_request_timeout_seconds) as client:
             resp = await client.post(
@@ -63,10 +66,14 @@ async def trigger_dag(
                 auth=(settings.airflow_username, settings.airflow_password),
             )
     except httpx.HTTPError as exc:
+        DAG_TRIGGERS_TOTAL.labels(dag_id=dag_id, status="rejected").inc()
         logger.error("Airflow trigger failed at transport layer", dag_id=dag_id, error=str(exc))
         raise AirflowUnavailable(f"Airflow unreachable: {exc}") from exc
+    finally:
+        DAG_TRIGGER_LATENCY.labels(dag_id=dag_id).observe(time.perf_counter() - start)
 
     if resp.status_code >= 400:
+        DAG_TRIGGERS_TOTAL.labels(dag_id=dag_id, status="rejected").inc()
         logger.error(
             "Airflow rejected DAG trigger",
             dag_id=dag_id,
@@ -77,6 +84,7 @@ async def trigger_dag(
             f"Airflow returned {resp.status_code}: {resp.text[:200]}"
         )
 
+    DAG_TRIGGERS_TOTAL.labels(dag_id=dag_id, status="accepted").inc()
     data = resp.json()
     logger.info(
         "Airflow DAG triggered",

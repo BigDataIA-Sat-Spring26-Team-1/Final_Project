@@ -1,0 +1,49 @@
+name: deploy
+
+# Manual deploys to prod. GitHub Actions kicks Cloud Build — Cloud Build
+# handles the actual Docker build and Cloud Run update so this workflow is
+# really just a remote trigger.
+#
+# Requires the following repo secrets:
+#   GCP_PROJECT_ID        numeric or string id
+#   GCP_SA_KEY            JSON key for a service account with cloudbuild.builds.create
+#   BACKEND_URL           the Cloud Run backend URL baked into the frontend
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Which service to deploy'
+        type: choice
+        options: [backend, frontend, both]
+        default: both
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Deploy backend
+        if: github.event.inputs.target == 'backend' || github.event.inputs.target == 'both'
+        run: |
+          gcloud builds submit \
+            --config=infrastructure/backend.cloudbuild.yaml \
+            .
+
+      - name: Deploy frontend
+        if: github.event.inputs.target == 'frontend' || github.event.inputs.target == 'both'
+        run: |
+          gcloud builds submit \
+            --config=infrastructure/frontend.cloudbuild.yaml \
+            --substitutions=_BACKEND_URL=${{ secrets.BACKEND_URL }} \
+            .

@@ -56,3 +56,21 @@ ACTIVE_AGENT_SESSIONS = Gauge(
     "Number of LangGraph workflows currently in-flight",
     registry=REGISTRY
 )
+
+# 5. DAG triggers — the backend no longer runs ingestion/dedup/trend inline.
+# Every call to /api/v1/ingestion, /api/v1/deduplication, /api/v1/trend/rank
+# attempts to fire an Airflow DAG; record the outcome so a Grafana panel can
+# distinguish config gaps (rejected) from healthy scheduling (accepted).
+DAG_TRIGGERS_TOTAL = Counter(
+    "curateai_dag_triggers_total",
+    "DAG trigger attempts from the backend to Airflow",
+    ["dag_id", "status"],  # status: accepted | rejected
+    registry=REGISTRY,
+)
+
+DAG_TRIGGER_LATENCY = Histogram(
+    "curateai_dag_trigger_latency_seconds",
+    "Time spent calling the Airflow REST API to fire a DAG",
+    ["dag_id"],
+    registry=REGISTRY,
+)

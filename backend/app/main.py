@@ -228,6 +228,72 @@ async def metrics():
     return Response(content=generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
 
 
+@app.get("/api/v1/metrics/summary", tags=["System"])
+async def metrics_summary():
+    """Compact JSON snapshot of the most useful Prometheus metrics.
+
+    The `/metrics` endpoint returns raw text that's painful for a browser to
+    parse. This endpoint pre-aggregates the dashboard-worthy numbers so the
+    frontend metrics panel can render them directly.
+    """
+    from prometheus_client.samples import Sample
+
+    def _collect():
+        """Walk the registry once and return a {metric_name: [sample, ...]} map."""
+        out: dict[str, list[Sample]] = {}
+        for mf in REGISTRY.collect():
+            out.setdefault(mf.name, []).extend(mf.samples)
+        return out
+
+    m = _collect()
+
+    def _counter_sum(name: str, label: str | None = None) -> dict[str, float]:
+        """Collapse a counter's samples keyed by the chosen label (or total)."""
+        totals: dict[str, float] = {}
+        for s in m.get(name, []):
+            if not s.name.endswith("_total"):
+                continue
+            key = s.labels.get(label, "total") if label else "total"
+            totals[key] = totals.get(key, 0.0) + float(s.value)
+        return totals
+
+    def _histogram_summary(name: str) -> dict[str, dict[str, float]]:
+        """Return {label: {count, sum, avg}} for a histogram, grouped by label_name."""
+        by_label: dict[str, dict[str, float]] = {}
+        for s in m.get(name, []):
+            # Skip bucket samples — we only need count + sum to compute avg.
+            if s.name.endswith("_bucket"):
+                continue
+            label_key = "_".join(f"{k}={v}" for k, v in s.labels.items()) or "overall"
+            entry = by_label.setdefault(label_key, {"count": 0.0, "sum": 0.0})
+            if s.name.endswith("_count"):
+                entry["count"] = float(s.value)
+            elif s.name.endswith("_sum"):
+                entry["sum"] = float(s.value)
+        for entry in by_label.values():
+            entry["avg_seconds"] = round(entry["sum"] / entry["count"], 4) if entry["count"] else 0.0
+        return by_label
+
+    return {
+        "llm": {
+            "requests_by_status": _counter_sum("curateai_llm_requests", "status"),
+            "tokens_by_type": _counter_sum("curateai_llm_tokens", "token_type"),
+            "cost_usd_by_model": _counter_sum("curateai_llm_cost", "model"),
+        },
+        "agents": {
+            "newsletter_rejections": sum(_counter_sum("curateai_newsletter_rejections").values()),
+            "node_latency": _histogram_summary("curateai_langgraph_node_latency_seconds"),
+        },
+        "http": {
+            "endpoint_latency": _histogram_summary("curateai_http_request_duration_seconds"),
+        },
+        "dags": {
+            "triggers_by_outcome": _counter_sum("curateai_dag_triggers", "status"),
+            "trigger_latency": _histogram_summary("curateai_dag_trigger_latency_seconds"),
+        },
+    }
+
+
 # ---- MCP integration ---------------------------------------------------------
 # Mount FastMCP as a sub-application so the same container serves both REST and
 # the MCP tool surface at /api/v1/mcp/{sse,messages}. If the SDK's mount API

@@ -346,6 +346,39 @@ export function getHealth(signal?: AbortSignal) {
 }
 
 // ============================================================================
+// Prometheus metrics (pre-aggregated JSON for dashboard UI)
+// ============================================================================
+
+export interface MetricsHistogramEntry {
+  count: number;
+  sum: number;
+  avg_seconds: number;
+}
+
+export interface MetricsSummary {
+  llm: {
+    requests_by_status: Record<string, number>;
+    tokens_by_type: Record<string, number>;
+    cost_usd_by_model: Record<string, number>;
+  };
+  agents: {
+    newsletter_rejections: number;
+    node_latency: Record<string, MetricsHistogramEntry>;
+  };
+  http: {
+    endpoint_latency: Record<string, MetricsHistogramEntry>;
+  };
+  dags: {
+    triggers_by_outcome: Record<string, number>;
+    trigger_latency: Record<string, MetricsHistogramEntry>;
+  };
+}
+
+export function getMetricsSummary(signal?: AbortSignal) {
+  return request<MetricsSummary>('/api/v1/metrics/summary', { method: 'GET', signal });
+}
+
+// ============================================================================
 // Personas
 // ============================================================================
 
