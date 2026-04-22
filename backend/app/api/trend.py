@@ -83,57 +83,44 @@ async def get_top_trends(
     """
     logger.info("Trend read requested", limit=limit, status_filter=status)
 
-    # A "velocity" that doesn't compare two days is dishonest — the UI used
-    # to hack it from cluster_size vs score. Instead we join per-cluster
-    # article counts for the selected day (curr) and the day before (prev),
-    # so the frontend can show real temporal motion. If no date is given we
-    # default to today so the endpoint still works for the public /trending
-    # page that doesn't pick a date.
+    # Day-over-day velocity is computed in a *separate* query below so a fault
+    # in the join can't take down the main trends feed — this endpoint is
+    # consumed by Global Trends, Keyword Velocity, Market Intelligence, and
+    # the admin clusters panel, so it has to stay up even if the velocity
+    # signal is temporarily unavailable.
     from datetime import date as _date, timedelta
 
     target_day = date or _date.today().isoformat()
     prev_day = (_date.fromisoformat(target_day) - timedelta(days=1)).isoformat()
 
     query = """
-        WITH curr_counts AS (
-            SELECT cluster_id, COUNT(*) AS n
-            FROM articles_raw
-            WHERE CAST(fetched_at AS DATE) = %s
-              AND cluster_id IS NOT NULL
-            GROUP BY cluster_id
-        ),
-        prev_counts AS (
-            SELECT cluster_id, COUNT(*) AS n
-            FROM articles_raw
-            WHERE CAST(fetched_at AS DATE) = %s
-              AND cluster_id IS NOT NULL
-            GROUP BY cluster_id
-        )
-        SELECT c.id,
-               c.primary_title,
-               c.primary_summary,
-               c.trend_status,
-               c.final_trend_score,
-               c.cluster_size,
-               c.social_popularity_score,
-               c.category_weights,
-               c.created_at,
-               COALESCE(cc.n, 0) AS curr_day_count,
-               COALESCE(pc.n, 0) AS prev_day_count
-        FROM article_clusters c
-        LEFT JOIN curr_counts cc ON cc.cluster_id = c.id
-        LEFT JOIN prev_counts pc ON pc.cluster_id = c.id
-        WHERE c.final_trend_score IS NOT NULL
+        SELECT id,
+               primary_title,
+               primary_summary,
+               trend_status,
+               final_trend_score,
+               cluster_size,
+               social_popularity_score,
+               category_weights,
+               created_at
+        FROM article_clusters
+        WHERE final_trend_score IS NOT NULL
     """
-    params: List[Any] = [target_day, prev_day]
+    params: List[Any] = []
     if status:
-        query += " AND UPPER(c.trend_status) = UPPER(%s)"
+        query += " AND UPPER(trend_status) = UPPER(%s)"
         params.append(status)
     if date:
         # created_at is a TIMESTAMP_NTZ; cast to DATE for an index-friendly compare.
-        query += " AND CAST(c.created_at AS DATE) = %s"
+        query += " AND CAST(created_at AS DATE) = %s"
         params.append(date)
-    query += " ORDER BY c.final_trend_score DESC NULLS LAST LIMIT %s"
+    # When a caller pins a date we want the highest-score clusters of that day
+    # first; with no date filter we bubble up the newest clusters (then score
+    # as a tiebreaker within the same batch).
+    if date:
+        query += " ORDER BY final_trend_score DESC NULLS LAST LIMIT %s"
+    else:
+        query += " ORDER BY created_at DESC, final_trend_score DESC NULLS LAST LIMIT %s"
     params.append(limit)
 
     # One try/except around the entire "read + serialise" path. Previously the
@@ -145,6 +132,32 @@ async def get_top_trends(
         cur.execute(query, tuple(params))
         cols = [c[0].lower() for c in cur.description]
         rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+
+        # Best-effort day-over-day counts. Isolated from the main query so a
+        # schema hiccup on articles_raw (e.g. stale cluster_id refs) can't
+        # 500 the whole feed — callers just see zeros for velocity.
+        cluster_ids = [r["id"] for r in rows if r.get("id")]
+        curr_counts: Dict[str, int] = {}
+        prev_counts: Dict[str, int] = {}
+        if cluster_ids:
+            try:
+                placeholders = ",".join(["%s"] * len(cluster_ids))
+                count_sql = (
+                    "SELECT cluster_id, CAST(fetched_at AS DATE) AS day, COUNT(*) AS n "
+                    "FROM articles_raw "
+                    f"WHERE cluster_id IN ({placeholders}) "
+                    "AND CAST(fetched_at AS DATE) IN (%s, %s) "
+                    "GROUP BY cluster_id, CAST(fetched_at AS DATE)"
+                )
+                cur.execute(count_sql, tuple(cluster_ids) + (target_day, prev_day))
+                for cid, day, n in cur.fetchall():
+                    day_iso = day.isoformat() if hasattr(day, "isoformat") else str(day)
+                    if day_iso == target_day:
+                        curr_counts[cid] = int(n)
+                    elif day_iso == prev_day:
+                        prev_counts[cid] = int(n)
+            except Exception as ce:
+                logger.warning("Day-over-day count lookup failed; returning zeros", error=str(ce))
 
         results: List[Dict[str, Any]] = []
         for r in rows:
@@ -171,10 +184,8 @@ async def get_top_trends(
                     "social_popularity_score": float(r["social_popularity_score"] or 0.0),
                     "categories": _safe_json(r["category_weights"]) or {},
                     "created_at": created_iso,
-                    # Real temporal velocity signal: how many articles rolled
-                    # into this cluster on the target day vs the day before.
-                    "curr_day_count": int(r.get("curr_day_count") or 0),
-                    "prev_day_count": int(r.get("prev_day_count") or 0),
+                    "curr_day_count": curr_counts.get(r["id"], 0),
+                    "prev_day_count": prev_counts.get(r["id"], 0),
                 }
             )
     except Exception as e:
