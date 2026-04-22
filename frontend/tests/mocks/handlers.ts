@@ -56,6 +56,8 @@ export const mockTrends = [
     social_popularity_score: 420,
     categories: { llms: 0.9, ai_policy: 0.3 },
     created_at: '2026-04-20T12:00:00Z',
+    curr_day_count: 6,
+    prev_day_count: 2,
   },
   {
     cluster_id: 'c-002',
@@ -67,6 +69,8 @@ export const mockTrends = [
     social_popularity_score: 150,
     categories: { data_engineering: 0.7 },
     created_at: '2026-04-20T10:00:00Z',
+    curr_day_count: 3,
+    prev_day_count: 0,
   },
 ];
 

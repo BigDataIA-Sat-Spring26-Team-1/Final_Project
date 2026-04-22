@@ -83,31 +83,57 @@ async def get_top_trends(
     """
     logger.info("Trend read requested", limit=limit, status_filter=status)
 
+    # A "velocity" that doesn't compare two days is dishonest — the UI used
+    # to hack it from cluster_size vs score. Instead we join per-cluster
+    # article counts for the selected day (curr) and the day before (prev),
+    # so the frontend can show real temporal motion. If no date is given we
+    # default to today so the endpoint still works for the public /trending
+    # page that doesn't pick a date.
+    from datetime import date as _date, timedelta
+
+    target_day = date or _date.today().isoformat()
+    prev_day = (_date.fromisoformat(target_day) - timedelta(days=1)).isoformat()
+
     query = """
-        SELECT id,
-               primary_title,
-               primary_summary,
-               trend_status,
-               final_trend_score,
-               cluster_size,
-               social_popularity_score,
-               category_weights,
-               created_at
-        FROM article_clusters
-        WHERE final_trend_score IS NOT NULL
+        WITH curr_counts AS (
+            SELECT cluster_id, COUNT(*) AS n
+            FROM articles_raw
+            WHERE CAST(fetched_at AS DATE) = %s
+              AND cluster_id IS NOT NULL
+            GROUP BY cluster_id
+        ),
+        prev_counts AS (
+            SELECT cluster_id, COUNT(*) AS n
+            FROM articles_raw
+            WHERE CAST(fetched_at AS DATE) = %s
+              AND cluster_id IS NOT NULL
+            GROUP BY cluster_id
+        )
+        SELECT c.id,
+               c.primary_title,
+               c.primary_summary,
+               c.trend_status,
+               c.final_trend_score,
+               c.cluster_size,
+               c.social_popularity_score,
+               c.category_weights,
+               c.created_at,
+               COALESCE(cc.n, 0) AS curr_day_count,
+               COALESCE(pc.n, 0) AS prev_day_count
+        FROM article_clusters c
+        LEFT JOIN curr_counts cc ON cc.cluster_id = c.id
+        LEFT JOIN prev_counts pc ON pc.cluster_id = c.id
+        WHERE c.final_trend_score IS NOT NULL
     """
-    params: List[Any] = []
+    params: List[Any] = [target_day, prev_day]
     if status:
-        query += " AND UPPER(trend_status) = UPPER(%s)"
+        query += " AND UPPER(c.trend_status) = UPPER(%s)"
         params.append(status)
     if date:
         # created_at is a TIMESTAMP_NTZ; cast to DATE for an index-friendly compare.
-        query += " AND CAST(created_at AS DATE) = %s"
+        query += " AND CAST(c.created_at AS DATE) = %s"
         params.append(date)
-    # Always score-order. The admin UI defaults its date picker to yesterday
-    # so the viewer sees the most recent batch's top-ranked clusters; clearing
-    # the date falls back to the all-time leaderboard.
-    query += " ORDER BY final_trend_score DESC NULLS LAST LIMIT %s"
+    query += " ORDER BY c.final_trend_score DESC NULLS LAST LIMIT %s"
     params.append(limit)
 
     # One try/except around the entire "read + serialise" path. Previously the
@@ -145,6 +171,10 @@ async def get_top_trends(
                     "social_popularity_score": float(r["social_popularity_score"] or 0.0),
                     "categories": _safe_json(r["category_weights"]) or {},
                     "created_at": created_iso,
+                    # Real temporal velocity signal: how many articles rolled
+                    # into this cluster on the target day vs the day before.
+                    "curr_day_count": int(r.get("curr_day_count") or 0),
+                    "prev_day_count": int(r.get("prev_day_count") or 0),
                 }
             )
     except Exception as e:

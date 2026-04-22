@@ -28,9 +28,11 @@ type Row = {
   status: string;
   prev: number;
   curr: number;
+  trendScore: number;
   deltaPct: number;
   isNegative: boolean;
   createdAt: string | null;
+  isNew: boolean;
 };
 
 // Default the trend view to yesterday so the admin sees the most recent
@@ -74,15 +76,19 @@ export default function AdminTrendsPage() {
     return Math.round((verified / trends.length) * 100);
   }, [trends]);
 
-  // We don't have a "previous window" snapshot endpoint. Approximate the
-  // delta by treating cluster_size as "prev", final_trend_score as "current"
-  // and computing the relative change. Honest about being a rough estimate.
+  // Real temporal velocity: articles that rolled into the cluster on the
+  // selected day vs the day before. 0→N shows as "new" rather than +Inf%.
   const rows: Row[] = useMemo(
     () =>
       trends.map((t) => {
-        const prev = Math.max(t.cluster_size, 1);
-        const curr = Math.max(1, Math.round(t.final_trend_score));
-        const deltaPct = Math.round(((curr - prev) / prev) * 100);
+        const prev = t.prev_day_count;
+        const curr = t.curr_day_count;
+        const deltaPct =
+          prev === 0
+            ? curr > 0
+              ? 100
+              : 0
+            : Math.round(((curr - prev) / prev) * 100);
         return {
           id: t.cluster_id,
           name: t.title,
@@ -90,9 +96,11 @@ export default function AdminTrendsPage() {
           status: (t.trend_status ?? 'REGULAR').toUpperCase(),
           prev,
           curr,
+          trendScore: Math.round(t.final_trend_score),
           deltaPct,
           isNegative: deltaPct < 0,
           createdAt: t.created_at,
+          isNew: prev === 0 && curr > 0,
         };
       }),
     [trends],
@@ -199,7 +207,8 @@ export default function AdminTrendsPage() {
                   <th className="px-8 py-5">Entity / Signal</th>
                   <th className="px-8 py-5">Date</th>
                   <th className="px-8 py-5">Status</th>
-                  <th className="px-8 py-5 text-center">Cluster Size</th>
+                  <th className="px-8 py-5 text-center">Prev Day</th>
+                  <th className="px-8 py-5 text-center">Curr Day</th>
                   <th className="px-8 py-5 text-center">Trend Score</th>
                   <th className="px-8 py-5 text-right">Velocity Δ</th>
                 </tr>
@@ -207,7 +216,7 @@ export default function AdminTrendsPage() {
               <tbody className="divide-y divide-white/5">
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-8 py-10 text-center text-dim italic">
+                    <td colSpan={7} className="px-8 py-10 text-center text-dim italic">
                       No clusters match the current filter.
                     </td>
                   </tr>
@@ -250,14 +259,21 @@ function TrendRow({ row }: { row: Row }) {
       </td>
       <td className="px-8 py-6 text-center text-dim font-medium">{row.prev}</td>
       <td className="px-8 py-6 text-center font-bold">{row.curr}</td>
+      <td className="px-8 py-6 text-center font-bold">{row.trendScore}</td>
       <td
         className={cn(
           'px-8 py-6 text-right font-black',
-          row.isNegative ? 'text-red-500' : 'text-emerald-500',
+          row.isNew ? 'text-emerald-400' : row.isNegative ? 'text-red-500' : 'text-emerald-500',
         )}
       >
-        {row.deltaPct >= 0 ? '+' : ''}
-        {row.deltaPct}% {row.isNegative ? '↓' : '↑'}
+        {row.isNew ? (
+          'NEW'
+        ) : (
+          <>
+            {row.deltaPct >= 0 ? '+' : ''}
+            {row.deltaPct}% {row.isNegative ? '↓' : '↑'}
+          </>
+        )}
       </td>
     </tr>
   );

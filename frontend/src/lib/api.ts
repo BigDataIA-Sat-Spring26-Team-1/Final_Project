@@ -242,6 +242,10 @@ export interface TrendCluster {
   social_popularity_score: number;
   categories: Record<string, number>;
   created_at: string | null;
+  /** Articles that rolled into this cluster on the queried day. */
+  curr_day_count: number;
+  /** Articles that rolled into this cluster the day before. */
+  prev_day_count: number;
 }
 
 export interface TrendTopResponse {
