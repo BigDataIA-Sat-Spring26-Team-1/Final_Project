@@ -1,0 +1,4 @@
+pydantic==2.12.5
+langchain-core==0.3.29
+langgraph==0.2.76
+python-dotenv==1.0.1

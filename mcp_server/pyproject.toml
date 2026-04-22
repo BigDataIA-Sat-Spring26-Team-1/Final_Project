@@ -1,0 +1,14 @@
+[project]
+name = "curateai-mcp-server"
+version = "1.0.0"
+description = "CurateAI Intelligence MCP Server"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.2.1",
+    "fastmcp>=0.4.1",
+    "pydantic-settings>=2.2.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

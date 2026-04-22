@@ -82,3 +82,17 @@ def create_base_graph() -> StateGraph:
     ...
     """
     return StateGraph(AgentState)
+
+
+def track_node_latency(node_func: Callable):
+    """Decorator to record LangGraph node execution time into Prometheus."""
+    @wraps(node_func)
+    async def wrapper(state: AgentState, *args, **kwargs):
+        start = time.perf_counter()
+        result = await node_func(state, *args, **kwargs)
+        duration = time.perf_counter() - start
+
+        # Record to Prometheus
+        LANGGRAPH_NODE_LATENCY.labels(node_name=node_func.__name__).observe(duration)
+        return result
+    return wrapper
