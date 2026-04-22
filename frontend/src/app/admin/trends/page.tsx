@@ -30,6 +30,7 @@ type Row = {
   curr: number;
   deltaPct: number;
   isNegative: boolean;
+  createdAt: string | null;
 };
 
 // Default the trend view to "all time" — explicit date filter lets admins
@@ -84,6 +85,7 @@ export default function AdminTrendsPage() {
           curr,
           deltaPct,
           isNegative: deltaPct < 0,
+          createdAt: t.created_at,
         };
       }),
     [trends],
@@ -188,6 +190,7 @@ export default function AdminTrendsPage() {
               <thead>
                 <tr className="bg-white/5 text-[10px] font-black uppercase tracking-widest text-dim border-b border-white/5">
                   <th className="px-8 py-5">Entity / Signal</th>
+                  <th className="px-8 py-5">Date</th>
                   <th className="px-8 py-5">Status</th>
                   <th className="px-8 py-5 text-center">Cluster Size</th>
                   <th className="px-8 py-5 text-center">Trend Score</th>
@@ -197,7 +200,7 @@ export default function AdminTrendsPage() {
               <tbody className="divide-y divide-white/5">
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-8 py-10 text-center text-dim italic">
+                    <td colSpan={6} className="px-8 py-10 text-center text-dim italic">
                       No clusters match the current filter.
                     </td>
                   </tr>
@@ -222,6 +225,9 @@ function TrendRow({ row }: { row: Row }) {
           {truncate(row.name, 56)}
         </p>
         <p className="text-xs text-dim">{row.sub}</p>
+      </td>
+      <td className="px-8 py-6 text-xs text-dim font-mono whitespace-nowrap">
+        {formatDate(row.createdAt)}
       </td>
       <td className="px-8 py-6">
         <span
@@ -252,6 +258,20 @@ function TrendRow({ row }: { row: Row }) {
 
 function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n - 1) + '…' : s;
+}
+
+function formatDate(iso: string | null): string {
+  if (!iso) return '—';
+  // Render as "22 Apr 2026" — short enough to fit the narrow column.
+  try {
+    return new Date(iso).toLocaleDateString(undefined, {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    });
+  } catch {
+    return iso.slice(0, 10);
+  }
 }
 
 function humanizeStatus(s: string | null): string {
