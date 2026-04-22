@@ -36,7 +36,7 @@ def rank_clusters(**context):
         except StopIteration:
             pass
 
-    log.info("Trend ranking finished", **result)
+    log.info("Trend ranking finished: %s", result)
     return result
 
 

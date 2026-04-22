@@ -88,7 +88,7 @@ def persist_articles(**context):
         except StopIteration:
             pass
 
-    log.info("Persisted articles", received=len(merged), saved=saved)
+    log.info("Persisted articles: received=%d saved=%d", len(merged), saved)
     return {"saved": saved, "received": len(merged)}
 
 

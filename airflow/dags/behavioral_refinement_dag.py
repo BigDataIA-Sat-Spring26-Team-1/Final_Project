@@ -117,7 +117,7 @@ def refine_weights(**context):
             touched += 1
 
         db.commit()
-        log.info("Behavioral rollup complete", users_touched=touched)
+        log.info("Behavioral rollup complete: users_touched=%d", touched)
         return {"users_touched": touched}
     finally:
         try:

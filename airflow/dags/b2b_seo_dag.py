@@ -71,8 +71,10 @@ def generate_briefs(**context):
                 else:
                     state = graph.invoke({"user_id": cid})
 
-                brief_md = (state or {}).get("final_report") or (state or {}).get("report") or ""
-                if not brief_md:
+                # The B2B graph stores its output under ``generated_content`` —
+                # same convention as the B2C agent — not ``final_report``.
+                brief_md = (state or {}).get("generated_content") or ""
+                if not brief_md.strip():
                     raise RuntimeError("Agent returned empty brief.")
 
                 cur.execute(
@@ -93,7 +95,7 @@ def generate_briefs(**context):
                 db.commit()
                 succeeded += 1
             except Exception as exc:
-                log.error("Brief generation failed", company_id=cid, error=str(exc))
+                log.error("Brief generation failed for company_id=%s: %s", cid, exc)
                 failures.append({"company_id": cid, "error": str(exc)[:250]})
     finally:
         loop.close()
@@ -103,10 +105,10 @@ def generate_briefs(**context):
             pass
 
     log.info(
-        "B2B brief fan-out complete",
-        attempted=len(companies),
-        succeeded=succeeded,
-        failed=len(failures),
+        "B2B brief fan-out complete: attempted=%d succeeded=%d failed=%d",
+        len(companies),
+        succeeded,
+        len(failures),
     )
     return {"attempted": len(companies), "succeeded": succeeded, "failures": failures}
 

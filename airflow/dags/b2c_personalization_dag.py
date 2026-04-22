@@ -99,7 +99,7 @@ def compute_selections(**context):
                     )
                 succeeded += 1
             except Exception as exc:
-                log.error("Personalization failed for user", user_id=uid, error=str(exc))
+                log.error("Personalization failed for user_id=%s: %s", uid, exc)
 
         if rows:
             cur.executemany(
@@ -119,10 +119,10 @@ def compute_selections(**context):
             pass
 
     log.info(
-        "Personalization complete",
-        attempted=attempted,
-        succeeded=succeeded,
-        rows_written=len(rows) if "rows" in locals() else 0,
+        "Personalization complete: attempted=%d succeeded=%d rows_written=%d",
+        attempted,
+        succeeded,
+        len(rows) if "rows" in locals() else 0,
     )
     return {
         "users_processed": succeeded,

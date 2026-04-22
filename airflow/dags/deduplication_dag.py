@@ -49,7 +49,7 @@ def fetch_unclustered(**context):
         except StopIteration:
             pass
 
-    log.info("Fetched unclustered articles", count=len(articles))
+    log.info("Fetched %d unclustered articles", len(articles))
     return articles
 
 
@@ -65,7 +65,7 @@ def cluster_articles(**context):
         return []
 
     clusters = _run_async(DeduplicationService.process_batch(articles))
-    log.info("Dedup complete", clusters=len(clusters), from_articles=len(articles))
+    log.info("Dedup complete: %d clusters from %d articles", len(clusters), len(articles))
 
     # Return cluster synthesis output — raw cluster dicts carry embeddings that
     # are far too large to round-trip through XCom. We keep only what persist
@@ -103,7 +103,7 @@ def persist_clusters(**context):
             pass
 
     total_linked = sum(len(l["article_ids"]) for l in linkage)
-    log.info("Clusters persisted", created=len(cluster_ids), linked=total_linked)
+    log.info("Clusters persisted: created=%d linked=%d", len(cluster_ids), total_linked)
     return {"created": len(cluster_ids), "linked": total_linked}
 
 

@@ -59,6 +59,11 @@ def resolve_users(**context):
 
 def generate_newsletters(**context):
     ensure_backend_on_path()
+    import json
+    import uuid
+    from datetime import date
+
+    from app.db.snowflake import get_db_connection
     from app.services.b2c_agent import get_b2c_newsletter_graph
 
     ti = context["ti"]
@@ -69,32 +74,83 @@ def generate_newsletters(**context):
 
     graph = get_b2c_newsletter_graph()
     loop = asyncio.new_event_loop()
+    db_gen = get_db_connection()
+    db = next(db_gen)
+    today = date.today().isoformat()
 
     failures = []
     succeeded = 0
     try:
+        cur = db.cursor()
         for uid in user_ids:
             try:
-                # The graph is LangGraph-based and async under the hood —
-                # ``ainvoke`` if available, otherwise drop back to a sync call.
                 if hasattr(graph, "ainvoke"):
-                    loop.run_until_complete(
+                    state = loop.run_until_complete(
                         graph.ainvoke({"user_id": uid, "execution_mode": "polished"})
                     )
                 else:
-                    graph.invoke({"user_id": uid, "execution_mode": "polished"})
+                    state = graph.invoke({"user_id": uid, "execution_mode": "polished"})
+
+                content = (state or {}).get("generated_content") or ""
+                if not content.strip():
+                    raise RuntimeError("Agent returned empty newsletter.")
+
+                # Track the path so ops can see which nodes the graph actually
+                # traversed per user — useful for debugging fast vs polished
+                # divergence during the demo.
+                path = (state or {}).get("execution_path_taken") or []
+                if isinstance(path, list):
+                    path = ",".join(path)[:500]
+
+                # Upsert keyed on (user_id, edition_date) so re-runs don't
+                # duplicate — one newsletter per user per day.
+                cur.execute(
+                    """
+                    MERGE INTO newsletters t
+                    USING (SELECT %s AS user_id, %s AS edition_date) s
+                    ON t.user_id = s.user_id AND t.edition_date = s.edition_date
+                    WHEN MATCHED THEN UPDATE SET
+                        final_content = %s,
+                        draft_content = %s,
+                        execution_path_taken = %s,
+                        status = 'PUBLISHED',
+                        generated_at = CURRENT_TIMESTAMP(),
+                        updated_at = CURRENT_TIMESTAMP()
+                    WHEN NOT MATCHED THEN INSERT
+                        (id, user_id, edition_date, final_content, draft_content,
+                         execution_path_taken, status, generated_at)
+                    VALUES (%s, s.user_id, s.edition_date, %s, %s, %s, 'PUBLISHED',
+                            CURRENT_TIMESTAMP())
+                    """,
+                    (
+                        uid,
+                        today,
+                        content,
+                        content,
+                        path,
+                        str(uuid.uuid4()),
+                        content,
+                        content,
+                        path,
+                    ),
+                )
+                db.commit()
                 succeeded += 1
             except Exception as exc:
-                log.error("Newsletter generation failed", user_id=uid, error=str(exc))
+                log.error("Newsletter generation failed for user_id=%s: %s", uid, exc)
                 failures.append({"user_id": uid, "error": str(exc)[:250]})
     finally:
         loop.close()
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
 
     log.info(
-        "Newsletter fan-out complete",
-        attempted=len(user_ids),
-        succeeded=succeeded,
-        failed=len(failures),
+        "Newsletter fan-out complete: attempted=%d succeeded=%d failed=%d",
+        len(user_ids),
+        succeeded,
+        len(failures),
     )
     return {"attempted": len(user_ids), "succeeded": succeeded, "failures": failures}
 

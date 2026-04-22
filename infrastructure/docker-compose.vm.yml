@@ -30,7 +30,10 @@ x-airflow-common: &airflow-common
     # The backend image path — DAGs prepend this to sys.path so they can
     # ``from app.services.*`` without a pip install.
     CURATEAI_BACKEND_PATH: /opt/airflow/backend
-    QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+    # NB: QDRANT_URL intentionally lives only in env_file (.env). Adding it
+    # here with ``${QDRANT_URL:-...}`` makes docker-compose interpolate
+    # against the host shell, which silently overrides env_file with the
+    # fallback when the shell var is unset.
   volumes:
     - ../airflow/dags:/opt/airflow/dags
     - ../airflow/logs:/opt/airflow/logs
@@ -87,7 +90,6 @@ services:
     env_file:
       - ../.env
     environment:
-      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
       AIRFLOW_HOST: http://airflow-webserver:8080
       AIRFLOW_USERNAME: ${AIRFLOW_ADMIN_USERNAME:-admin}
       AIRFLOW_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-admin}
