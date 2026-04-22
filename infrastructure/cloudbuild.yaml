@@ -1,0 +1,95 @@
+steps:
+  # ── Build Backend Image ──
+  - name: "gcr.io/cloud-builders/docker"
+    id: build-backend
+    args:
+      - "build"
+      - "-t"
+      - "us-east1-docker.pkg.dev/$PROJECT_ID/curateai/backend:$COMMIT_SHA"
+      - "-t"
+      - "us-east1-docker.pkg.dev/$PROJECT_ID/curateai/backend:latest"
+      - "-f"
+      - "backend/Dockerfile"
+      - "backend"
+
+  # ── Build Airflow Image ──
+  - name: "gcr.io/cloud-builders/docker"
+    id: build-airflow
+    args:
+      - "build"
+      - "-t"
+      - "us-east1-docker.pkg.dev/$PROJECT_ID/curateai/airflow:$COMMIT_SHA"
+      - "-t"
+      - "us-east1-docker.pkg.dev/$PROJECT_ID/curateai/airflow:latest"
+      - "-f"
+      - "airflow/Dockerfile"
+      - "."
+
+  # ── Build MCP Server Image ──
+  - name: "gcr.io/cloud-builders/docker"
+    id: build-mcp-server
+    args:
+      - "build"
+      - "-t"
+      - "us-east1-docker.pkg.dev/$PROJECT_ID/curateai/mcp-server:$COMMIT_SHA"
+      - "-t"
+      - "us-east1-docker.pkg.dev/$PROJECT_ID/curateai/mcp-server:latest"
+      - "-f"
+      - "mcp_server/Dockerfile"
+      - "."
+
+  # ── Push All Images ──
+  - name: "gcr.io/cloud-builders/docker"
+    id: push-backend
+    args: ["push", "--all-tags", "us-east1-docker.pkg.dev/$PROJECT_ID/curateai/backend"]
+
+  - name: "gcr.io/cloud-builders/docker"
+    id: push-airflow
+    args: ["push", "--all-tags", "us-east1-docker.pkg.dev/$PROJECT_ID/curateai/airflow"]
+
+  - name: "gcr.io/cloud-builders/docker"
+    id: push-mcp-server
+    args: ["push", "--all-tags", "us-east1-docker.pkg.dev/$PROJECT_ID/curateai/mcp-server"]
+
+  # ── Deploy Backend to Cloud Run ──
+  - name: "gcr.io/cloud-builders/gcloud"
+    id: deploy-backend
+    args:
+      - "run"
+      - "deploy"
+      - "curateai-backend"
+      - "--image"
+      - "us-east1-docker.pkg.dev/$PROJECT_ID/curateai/backend:$COMMIT_SHA"
+      - "--region"
+      - "us-east1"
+      - "--platform"
+      - "managed"
+      - "--allow-unauthenticated"
+      - "--port"
+      - "8000"
+      - "--memory"
+      - "2Gi"
+      - "--cpu"
+      - "2"
+      - "--min-instances"
+      - "0"
+      - "--max-instances"
+      - "3"
+      - "--set-secrets"
+      - "SNOWFLAKE_ACCOUNT=SNOWFLAKE_ACCOUNT:latest,SNOWFLAKE_USER=SNOWFLAKE_USER:latest,SNOWFLAKE_PASSWORD=SNOWFLAKE_PASSWORD:latest,SNOWFLAKE_DATABASE=SNOWFLAKE_DATABASE:latest,SNOWFLAKE_SCHEMA=SNOWFLAKE_SCHEMA:latest,SNOWFLAKE_WAREHOUSE=SNOWFLAKE_WAREHOUSE:latest,SNOWFLAKE_ROLE=SNOWFLAKE_ROLE:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest,SECRET_KEY=SECRET_KEY:latest"
+      - "--set-env-vars"
+      - "APP_NAME=Curate AI,APP_VERSION=1.0.0,APP_ENV=production,DEBUG=False,LOG_LEVEL=INFO,EMBEDDING_MODEL_NAME=text-embedding-3-small,LLM_MODEL_NAME=gpt-4o-mini"
+
+images:
+  - "us-east1-docker.pkg.dev/$PROJECT_ID/curateai/backend:$COMMIT_SHA"
+  - "us-east1-docker.pkg.dev/$PROJECT_ID/curateai/backend:latest"
+  - "us-east1-docker.pkg.dev/$PROJECT_ID/curateai/airflow:$COMMIT_SHA"
+  - "us-east1-docker.pkg.dev/$PROJECT_ID/curateai/airflow:latest"
+  - "us-east1-docker.pkg.dev/$PROJECT_ID/curateai/mcp-server:$COMMIT_SHA"
+  - "us-east1-docker.pkg.dev/$PROJECT_ID/curateai/mcp-server:latest"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+
+timeout: "1800s"

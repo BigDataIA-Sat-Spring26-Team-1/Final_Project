@@ -39,7 +39,7 @@ NEWSLETTER_REJECTIONS_TOTAL = Counter(
 HTTP_REQUEST_DURATION = Histogram(
     "curateai_http_request_duration_seconds",
     "Latency of HTTP requests in seconds",
-    ["method", "endpoint"],
+    ["method", "endpoint", "status"],
     registry=REGISTRY
 )
 

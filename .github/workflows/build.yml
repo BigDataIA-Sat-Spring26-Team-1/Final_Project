@@ -1,0 +1,52 @@
+name: Build
+
+on:
+  push:
+    branches: [main, Abhinav]
+  pull_request:
+    branches: [main]
+
+env:
+  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GCP_REGION: us-east1
+  BACKEND_IMAGE: us-east1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/curateai/backend
+  AIRFLOW_IMAGE: us-east1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/curateai/airflow
+
+jobs:
+  build-backend:
+    name: Build Backend Image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: false
+          tags: ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  build-airflow:
+    name: Build Airflow Image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build airflow image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./airflow/Dockerfile
+          push: false
+          tags: ${{ env.AIRFLOW_IMAGE }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

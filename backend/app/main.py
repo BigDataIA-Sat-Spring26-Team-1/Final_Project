@@ -82,7 +82,8 @@ async def request_context_middleware(request: Request, call_next):
     # Task 20: Record Prometheus Latency
     HTTP_REQUEST_DURATION.labels(
         method=request.method,
-        endpoint=request.url.path
+        endpoint=request.url.path,
+        status=response.status_code
     ).observe(duration)
 
     response.headers["X-Process-Time"] = str(duration)
