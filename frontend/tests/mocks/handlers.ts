@@ -181,6 +181,34 @@ export const handlers = [
     });
   }),
 
+  // ---- Admin roster stubs (used by UserSwitcher / CompanySwitcher). -------
+  http.get(`${API}/api/v1/admin/users`, () =>
+    HttpResponse.json({
+      total: 0,
+      results: [],
+    }),
+  ),
+  http.get(`${API}/api/v1/admin/companies`, () =>
+    HttpResponse.json({
+      total: 0,
+      results: [],
+    }),
+  ),
+  http.get(`${API}/api/v1/admin/newsletters/all`, () =>
+    HttpResponse.json({
+      date: '2026-04-20',
+      total: 0,
+      results: [],
+    }),
+  ),
+  http.get(`${API}/api/v1/admin/briefs/all`, () =>
+    HttpResponse.json({
+      date: '2026-04-20',
+      total: 0,
+      results: [],
+    }),
+  ),
+
   // ---- Trend ----
   http.get(`${API}/api/v1/trend/top`, ({ request }) => {
     const url = new URL(request.url);

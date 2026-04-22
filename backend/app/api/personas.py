@@ -10,10 +10,28 @@ from app.core.schemas import (
     ArticleFeedbackRequest,
     ArticleFeedbackResponse,
     BatchPersonaResponse,
+    UserPersonaUpdate,
 )
 from app.db.snowflake import get_db_connection
 from app.repository.persona import PersonaRepository
 from app.services.persona_service import PersonaService
+
+
+from pydantic import BaseModel, Field
+from typing import Dict
+
+
+class ManualPersonaRequest(BaseModel):
+    """Hand-picked persona payload for users who prefer to skip PDF extraction."""
+    user_id: str
+    job_title: str = Field(..., min_length=1)
+    seniority: str = Field(..., min_length=1)
+    bio_summary: str = ""
+    persona_archetype: str = "GENERAL_TECH_ENVELOPE"
+    linkedin_url: str | None = None
+    # Weights are stored as a [0, 1] float per category. Keys must match the
+    # CategoryWeights taxonomy so downstream scoring stays consistent.
+    explicit_category_weights: Dict[str, float] = Field(default_factory=dict)
 
 logger = get_logger("app.api.personas")
 router = APIRouter()
@@ -25,6 +43,36 @@ _FEEDBACK_DELTAS = {
     "dislike": -0.15,
     "skip": -0.05,
 }
+
+
+@router.post("/manual", status_code=201)
+async def create_manual_persona(
+    payload: ManualPersonaRequest,
+    db: SnowflakeConnection = Depends(get_db_connection),
+):
+    """Create a persona from hand-picked weights (no PDF extraction).
+
+    The upload flow handles most users, but a demo walkthrough benefits from a
+    "skip the PDF, just let me pick weights" path. We normalise weights to
+    [0, 1] and drop anything below 0.05 as noise, matching the feedback loop.
+    """
+    cleaned = {
+        cat: round(max(0.0, min(1.0, float(w))), 4)
+        for cat, w in (payload.explicit_category_weights or {}).items()
+        if float(w) >= 0.05
+    }
+    update = UserPersonaUpdate(
+        user_id=payload.user_id,
+        linkedin_url=payload.linkedin_url,
+        job_title=payload.job_title,
+        seniority=payload.seniority,
+        persona_archetype=payload.persona_archetype,
+        bio_summary=payload.bio_summary,
+        explicit_category_weights=cleaned,
+    )
+    persona_id = PersonaRepository.upsert_persona(db, update)
+    logger.info("Manual persona created", user_id=payload.user_id, categories=list(cleaned.keys()))
+    return {"user_id": payload.user_id, "persona_id": persona_id, "status": "created"}
 
 
 @router.post("/extract", response_model=BatchPersonaResponse)

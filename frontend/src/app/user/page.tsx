@@ -19,10 +19,12 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { FeedableArticleRow } from '@/components/DashboardComponents';
 import { PageWrapper } from '@/components/PageWrapper';
+import { UserSwitcher } from '@/components/UserSwitcher';
 import {
   ApiError,
   getPersona,
   getRecommendations,
+  getTopTrends,
   type RankedArticle,
   type StoredPersona,
 } from '@/lib/api';
@@ -39,6 +41,7 @@ export default function UserDashboard() {
   const [userId, setUserId] = useState('');
   const [persona, setPersona] = useState<StoredPersona | null>(null);
   const [articles, setArticles] = useState<RankedArticle[]>([]);
+  const [globalArticles, setGlobalArticles] = useState<RankedArticle[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -84,6 +87,30 @@ export default function UserDashboard() {
     return () => controller.abort();
   }, [userId, loadFeed]);
 
+  // Global highlights are the same-day top-ranked clusters, independent of
+  // any single user. Fetched once on mount so tab switching is instant.
+  useEffect(() => {
+    const controller = new AbortController();
+    getTopTrends(FEED_LIMIT, undefined, controller.signal)
+      .then((r) => {
+        setGlobalArticles(
+          r.results.map((t) => ({
+            cluster_id: t.cluster_id,
+            title: t.title,
+            summary: t.summary ?? undefined,
+            score: t.final_trend_score / 100,
+            cluster_size: t.cluster_size,
+            categories: t.categories,
+            trend_status: t.trend_status,
+          })),
+        );
+      })
+      .catch(() => {
+        // Tab stays empty on failure — personalized tab has its own error banner.
+      });
+    return () => controller.abort();
+  }, []);
+
   // Optimistic removal on skip — keeps the feed interesting as the user rates.
   const handleArticleFeedback = useCallback(
     (type: 'like' | 'dislike' | 'skip', article: RankedArticle) => {
@@ -112,14 +139,27 @@ export default function UserDashboard() {
             </p>
           </div>
 
-          {/* Tiny user id input — the demo auth story until real login lands. */}
-          <input
-            type="text"
-            placeholder="user id"
-            value={userId}
-            onChange={(e) => setUserId(e.target.value)}
-            className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm outline-none focus:border-primary/40 font-mono min-w-[220px]"
-          />
+          {/* Pick an existing user from the dropdown, or type an id directly
+              in the advanced input below. The switcher calls /admin/users to
+              populate itself. */}
+          <div className="flex flex-col gap-2 items-end">
+            <UserSwitcher
+              currentUserId={userId || null}
+              onSelect={(id) => {
+                setUserId(id);
+                if (typeof window !== 'undefined') {
+                  sessionStorage.setItem(STORAGE_KEY, id);
+                }
+              }}
+            />
+            <input
+              type="text"
+              placeholder="or paste a user id…"
+              value={userId}
+              onChange={(e) => setUserId(e.target.value)}
+              className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2 text-xs outline-none focus:border-primary/40 font-mono min-w-[260px]"
+            />
+          </div>
         </header>
 
         <div className="flex items-center gap-1 p-1 glass rounded-2xl w-fit border border-white/5">
@@ -136,13 +176,11 @@ export default function UserDashboard() {
           </button>
           <button
             onClick={() => setActiveTab('COMMON')}
-            disabled
-            title="Global highlights endpoint not yet available"
             className={cn(
               'px-6 py-2 rounded-xl text-sm font-bold transition-all',
               activeTab === 'COMMON'
                 ? 'bg-secondary text-white shadow-lg shadow-secondary/20'
-                : 'text-dim hover:text-white opacity-50 cursor-not-allowed',
+                : 'text-dim hover:text-white',
             )}
           >
             Global Highlights
@@ -167,20 +205,38 @@ export default function UserDashboard() {
             </div>
 
             <div className="space-y-4">
-              {!userId && <PromptCard message="Enter a user id to load your personalized feed." />}
+              {activeTab === 'PERSONALIZED' ? (
+                <>
+                  {!userId && <PromptCard message="Pick a user from the dropdown to load your personalized feed." />}
 
-              {userId && !loading && articles.length === 0 && !error && (
-                <PromptCard message="No articles queued — run onboarding, then trigger an ingestion to populate the feed." />
+                  {userId && !loading && articles.length === 0 && !error && (
+                    <PromptCard message="No articles queued — run onboarding, then trigger an ingestion to populate the feed." />
+                  )}
+
+                  {articles.map((article) => (
+                    <FeedableArticleRow
+                      key={article.cluster_id}
+                      article={article}
+                      userId={userId}
+                      onFeedback={handleArticleFeedback}
+                    />
+                  ))}
+                </>
+              ) : (
+                <>
+                  {globalArticles.length === 0 && (
+                    <PromptCard message="No ranked clusters yet — trigger ingestion + ranking to populate." />
+                  )}
+                  {globalArticles.map((article) => (
+                    <FeedableArticleRow
+                      key={article.cluster_id}
+                      article={article}
+                      userId={userId}
+                      onFeedback={handleArticleFeedback}
+                    />
+                  ))}
+                </>
               )}
-
-              {articles.map((article) => (
-                <FeedableArticleRow
-                  key={article.cluster_id}
-                  article={article}
-                  userId={userId}
-                  onFeedback={handleArticleFeedback}
-                />
-              ))}
             </div>
           </div>
 

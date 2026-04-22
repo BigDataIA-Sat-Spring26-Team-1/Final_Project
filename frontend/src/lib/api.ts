@@ -410,6 +410,28 @@ export function extractPersonas(
   });
 }
 
+export interface ManualPersonaRequest {
+  user_id: string;
+  job_title: string;
+  seniority: string;
+  bio_summary?: string;
+  persona_archetype?: string;
+  linkedin_url?: string | null;
+  explicit_category_weights: Record<string, number>;
+}
+
+/** Skip the PDF extractor and set persona weights by hand. */
+export function createManualPersona(
+  payload: ManualPersonaRequest,
+  signal?: AbortSignal,
+): Promise<{ user_id: string; persona_id: string; status: string }> {
+  return request('/api/v1/personas/manual', {
+    method: 'POST',
+    json: payload,
+    signal,
+  });
+}
+
 /** Record a like / dislike / skip signal against an article. */
 export function submitArticleFeedback(
   payload: ArticleFeedbackRequest,
@@ -497,10 +519,11 @@ export function getTopTrends(
   limit: number = 20,
   status?: string,
   signal?: AbortSignal,
+  date?: string,
 ): Promise<TrendTopResponse> {
   return request<TrendTopResponse>('/api/v1/trend/top', {
     method: 'GET',
-    query: { limit, status },
+    query: { limit, status, date },
     signal,
   });
 }
@@ -606,6 +629,64 @@ export function listCompanies(
   return request<CompanyListResponse>('/api/v1/admin/companies', {
     method: 'GET',
     query: { limit, offset },
+    signal,
+  });
+}
+
+export interface CrossTenantNewsletterItem {
+  id: string;
+  user_id: string;
+  edition_date: string;
+  status: string;
+  generated_at: string | null;
+  execution_path_taken: string | null;
+  user_email: string | null;
+  user_full_name: string | null;
+}
+
+export interface CrossTenantNewslettersResponse {
+  date: string;
+  total: number;
+  results: CrossTenantNewsletterItem[];
+}
+
+export function listGlobalNewsletters(
+  date?: string,
+  limit: number = 50,
+  signal?: AbortSignal,
+): Promise<CrossTenantNewslettersResponse> {
+  return request<CrossTenantNewslettersResponse>('/api/v1/admin/newsletters/all', {
+    method: 'GET',
+    query: { date, limit },
+    signal,
+  });
+}
+
+export interface CrossTenantBriefItem {
+  id: string;
+  company_id: string;
+  brief_date: string;
+  urgency_tier: string | null;
+  generated_at: string | null;
+  content_length: number;
+  company_name: string | null;
+  company_domain: string | null;
+}
+
+export interface CrossTenantBriefsResponse {
+  date: string;
+  total: number;
+  results: CrossTenantBriefItem[];
+}
+
+export function listGlobalBriefs(
+  date?: string,
+  limit: number = 50,
+  signal?: AbortSignal,
+): Promise<CrossTenantBriefsResponse> {
+  return request<CrossTenantBriefsResponse>('/api/v1/admin/briefs/all', {
+    method: 'GET',
+    query: { date, limit },
     signal,
   });
 }

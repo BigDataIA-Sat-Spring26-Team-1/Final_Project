@@ -296,6 +296,96 @@ async def update_company(
 # Archive reads
 # ---------------------------------------------------------------------------
 
+@router.get("/newsletters/all")
+async def newsletters_cross_tenant(
+    date: Optional[str] = Query(
+        None,
+        description="YYYY-MM-DD. Defaults to yesterday so admins see the freshest completed batch.",
+    ),
+    limit: int = Query(50, ge=1, le=200),
+    db: SnowflakeConnection = Depends(get_db_connection),
+) -> Dict[str, Any]:
+    """Cross-user newsletter archive for the admin console.
+
+    Without a date filter this returns the newsletters written *yesterday*,
+    which is usually the most recent fully-generated batch at the time an
+    admin is looking at the page. Pass ``date`` to look further back.
+    """
+    from datetime import date as _date, timedelta
+
+    effective = date or (_date.today() - timedelta(days=1)).isoformat()
+
+    cur = db.cursor()
+    cur.execute(
+        """
+        SELECT n.id, n.user_id, n.edition_date, n.status, n.generated_at,
+               n.execution_path_taken, u.email, u.full_name
+        FROM newsletters n
+        LEFT JOIN users u ON u.id = n.user_id
+        WHERE n.edition_date = %s
+        ORDER BY n.generated_at DESC NULLS LAST
+        LIMIT %s
+        """,
+        (effective, limit),
+    )
+    rows = cur.fetchall()
+    results = [
+        {
+            "id": r[0],
+            "user_id": r[1],
+            "edition_date": _iso(r[2]),
+            "status": r[3],
+            "generated_at": _iso(r[4]),
+            "execution_path_taken": r[5],
+            "user_email": r[6],
+            "user_full_name": r[7],
+        }
+        for r in rows
+    ]
+    return {"date": effective, "total": len(results), "results": results}
+
+
+@router.get("/briefs/all")
+async def briefs_cross_tenant(
+    date: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    db: SnowflakeConnection = Depends(get_db_connection),
+) -> Dict[str, Any]:
+    """Cross-company brief archive. Mirrors /newsletters/all."""
+    from datetime import date as _date, timedelta
+
+    effective = date or (_date.today() - timedelta(days=1)).isoformat()
+
+    cur = db.cursor()
+    cur.execute(
+        """
+        SELECT b.id, b.company_id, b.brief_date, b.urgency_tier, b.generated_at,
+               LENGTH(b.brief_content), c.name, c.domain
+        FROM content_briefs b
+        LEFT JOIN companies c ON c.id = b.company_id
+        WHERE b.brief_date = %s
+        ORDER BY b.generated_at DESC NULLS LAST
+        LIMIT %s
+        """,
+        (effective, limit),
+    )
+    rows = cur.fetchall()
+    results = [
+        {
+            "id": r[0],
+            "company_id": r[1],
+            "brief_date": _iso(r[2]),
+            "urgency_tier": r[3],
+            "generated_at": _iso(r[4]),
+            "content_length": int(r[5]) if r[5] is not None else 0,
+            "company_name": r[6],
+            "company_domain": r[7],
+        }
+        for r in rows
+    ]
+    return {"date": effective, "total": len(results), "results": results}
+
+
 @router.get("/newsletters/archive")
 async def newsletter_archive(
     user_id: str = Query(..., description="The user whose newsletters to load."),

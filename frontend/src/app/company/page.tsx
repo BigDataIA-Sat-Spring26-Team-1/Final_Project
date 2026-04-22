@@ -16,6 +16,7 @@ import {
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 
+import { CompanySwitcher } from '@/components/CompanySwitcher';
 import {
   EntityItem,
   TrendFeatureCard,
@@ -93,14 +94,23 @@ export default function CompanyDashboard() {
               <strong>{companyId || '— set a client id —'}</strong>.
             </p>
           </div>
-          <input
-            type="text"
-            placeholder="corporate client id"
-            value={companyId}
-            onChange={(e) => setCompanyId(e.target.value)}
-            onBlur={() => companyId && setLastCompanyId(companyId)}
-            className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm outline-none focus:border-primary/40 font-mono min-w-[260px]"
-          />
+          <div className="flex flex-col gap-2 items-end">
+            <CompanySwitcher
+              currentCompanyId={companyId || null}
+              onSelect={(id) => {
+                setCompanyId(id);
+                setLastCompanyId(id);
+              }}
+            />
+            <input
+              type="text"
+              placeholder="or paste a corporate client id…"
+              value={companyId}
+              onChange={(e) => setCompanyId(e.target.value)}
+              onBlur={() => companyId && setLastCompanyId(companyId)}
+              className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2 text-xs outline-none focus:border-primary/40 font-mono min-w-[260px]"
+            />
+          </div>
         </header>
 
         {error && (

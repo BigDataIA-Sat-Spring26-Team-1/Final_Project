@@ -21,12 +21,31 @@ import { useRef, useState } from 'react';
 import { PageWrapper } from '@/components/PageWrapper';
 import {
   ApiError,
+  createManualPersona,
   extractPersonas,
   type BatchPersonaResponse,
   type PersonaExtractionResult,
   type SinglePersonaExtractionResponse,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
+
+// Three ways to land a persona. LinkedIn + Resume share the extract endpoint —
+// the backend parser doesn't actually care about the label. Manual is the
+// click-path that avoids the LLM extractor entirely.
+type OnboardingMode = 'linkedin' | 'resume' | 'manual';
+
+const CATEGORY_TAXONOMY: { key: string; label: string }[] = [
+  { key: 'llms', label: 'LLMs' },
+  { key: 'ai_agents', label: 'AI Agents' },
+  { key: 'computer_vision', label: 'Computer Vision' },
+  { key: 'security', label: 'Security' },
+  { key: 'hardware', label: 'Hardware' },
+  { key: 'software_engineering', label: 'Software Engineering' },
+  { key: 'ai_policy', label: 'AI Policy' },
+  { key: 'general_ai', label: 'General AI' },
+  { key: 'data_engineering', label: 'Data Engineering' },
+  { key: 'startups', label: 'Startups' },
+];
 
 // 10 MB matches the copy under the drop zone. We check client-side so the user
 // gets instant feedback instead of waiting for a 413 round-trip.
@@ -35,11 +54,53 @@ const MAX_FILE_BYTES = 10 * 1024 * 1024;
 export default function UserOnboarding() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const [mode, setMode] = useState<OnboardingMode>('linkedin');
   const [userId, setUserId] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [result, setResult] = useState<BatchPersonaResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Manual-mode state — only read when mode === 'manual'.
+  const [manualJobTitle, setManualJobTitle] = useState('');
+  const [manualSeniority, setManualSeniority] = useState('mid');
+  const [manualBio, setManualBio] = useState('');
+  const [manualWeights, setManualWeights] = useState<Record<string, number>>(
+    Object.fromEntries(CATEGORY_TAXONOMY.map(({ key }) => [key, 0])),
+  );
+  const [manualSuccess, setManualSuccess] = useState<string | null>(null);
+
+  const handleManualSubmit = async () => {
+    if (!userId.trim()) {
+      setError('Enter a user id first.');
+      return;
+    }
+    if (!manualJobTitle.trim()) {
+      setError('Job title is required for a manual persona.');
+      return;
+    }
+    setIsSubmitting(true);
+    setError(null);
+    setManualSuccess(null);
+    try {
+      const out = await createManualPersona({
+        user_id: userId.trim(),
+        job_title: manualJobTitle.trim(),
+        seniority: manualSeniority,
+        bio_summary: manualBio.trim(),
+        explicit_category_weights: manualWeights,
+      });
+      setManualSuccess(`Persona ${out.persona_id.slice(0, 8)}… saved for ${out.user_id}.`);
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? `${err.status}: ${err.detail ?? err.message}`
+          : (err as Error).message,
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   const handleFilesPicked = (picked: FileList | null) => {
     if (!picked || picked.length === 0) return;
@@ -109,17 +170,23 @@ export default function UserOnboarding() {
             title="LinkedIn PDF"
             description="Upload your exported LinkedIn profile to automatically extract entities and skills."
             icon={Link}
+            selected={mode === 'linkedin'}
             primary
+            onClick={() => setMode('linkedin')}
           />
           <OnboardingOption
             title="Resume / CV"
             description="Upload a standard PDF resume for deep scanning of your professional background."
             icon={FileText}
+            selected={mode === 'resume'}
+            onClick={() => setMode('resume')}
           />
           <OnboardingOption
             title="Manual Setup"
             description="Hand-pick your interest clusters, technical focus areas, and industry sectors."
             icon={ArrowRight}
+            selected={mode === 'manual'}
+            onClick={() => setMode('manual')}
           />
           <div className="glass rounded-3xl p-8 border border-white/5 flex flex-col items-center justify-center space-y-4 text-center">
             <div className="p-3 bg-white/5 rounded-full">
@@ -131,8 +198,16 @@ export default function UserOnboarding() {
 
         <div className="glass rounded-[2.5rem] p-12 border border-white/5 flex flex-col items-center text-center space-y-8 bg-gradient-to-b from-white/[0.02] to-transparent">
           <div className="space-y-2">
-            <h3 className="text-2xl font-bold">Quick Upload</h3>
-            <p className="text-dim">Drag and drop your LinkedIn PDF or Resume here to start the extraction agent.</p>
+            <h3 className="text-2xl font-bold">
+              {mode === 'manual' ? 'Manual Persona Setup' : mode === 'resume' ? 'Resume Upload' : 'LinkedIn Upload'}
+            </h3>
+            <p className="text-dim">
+              {mode === 'manual'
+                ? 'Fill in your role and dial the category weights to tell CurateAI what to surface.'
+                : mode === 'resume'
+                ? 'Drop a standard PDF resume here; the extractor pulls role, seniority, and interest weights.'
+                : 'Drop your LinkedIn-exported PDF here; the extractor turns it into a structured persona.'}
+            </p>
           </div>
 
           {/* Minimal user_id input — swap for real auth once login is in place. */}
@@ -148,6 +223,8 @@ export default function UserOnboarding() {
             />
           </label>
 
+          {mode !== 'manual' && (
+            <>
           {/* Hidden file input triggered by the styled drop zone label. */}
           <input
             ref={fileInputRef}
@@ -212,6 +289,106 @@ export default function UserOnboarding() {
           </button>
 
           <p className="text-[10px] text-zinc-600 uppercase tracking-widest font-black">Supported formats: PDF (Max 10MB)</p>
+            </>
+          )}
+
+          {mode === 'manual' && (
+            <div className="w-full max-w-2xl space-y-6 text-left">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <label className="space-y-2">
+                  <span className="text-xs uppercase tracking-widest text-dim font-bold">Job title</span>
+                  <input
+                    type="text"
+                    value={manualJobTitle}
+                    onChange={(e) => setManualJobTitle(e.target.value)}
+                    placeholder="Senior Data Engineer"
+                    className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm outline-none focus:border-primary/40"
+                  />
+                </label>
+                <label className="space-y-2">
+                  <span className="text-xs uppercase tracking-widest text-dim font-bold">Seniority</span>
+                  <select
+                    value={manualSeniority}
+                    onChange={(e) => setManualSeniority(e.target.value)}
+                    className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm outline-none focus:border-primary/40"
+                  >
+                    {['entry', 'mid', 'senior', 'lead', 'executive'].map((s) => (
+                      <option key={s} value={s} className="bg-zinc-900">{s}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <label className="block space-y-2">
+                <span className="text-xs uppercase tracking-widest text-dim font-bold">Bio (optional)</span>
+                <textarea
+                  value={manualBio}
+                  onChange={(e) => setManualBio(e.target.value)}
+                  rows={3}
+                  placeholder="Two-sentence summary of what you work on."
+                  className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm outline-none focus:border-primary/40 resize-none"
+                />
+              </label>
+
+              <div className="space-y-3">
+                <p className="text-xs uppercase tracking-widest text-dim font-bold">Category weights</p>
+                <p className="text-xs text-dim">
+                  Slide each category between 0 and 1 to tell the recommender which topics you care about. Start at 0.
+                </p>
+                <div className="space-y-3">
+                  {CATEGORY_TAXONOMY.map(({ key, label }) => (
+                    <div key={key} className="flex items-center gap-4">
+                      <span className="text-sm font-bold w-44 shrink-0">{label}</span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={manualWeights[key] ?? 0}
+                        onChange={(e) =>
+                          setManualWeights((prev) => ({
+                            ...prev,
+                            [key]: parseFloat(e.target.value),
+                          }))
+                        }
+                        className="flex-1 accent-primary"
+                      />
+                      <span className="text-xs font-mono w-10 text-right text-dim">
+                        {(manualWeights[key] ?? 0).toFixed(2)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleManualSubmit}
+                disabled={isSubmitting || !userId.trim() || !manualJobTitle.trim()}
+                className={cn(
+                  'w-full px-8 py-3 rounded-xl font-bold bg-primary text-primary-foreground',
+                  'flex items-center justify-center gap-2',
+                  'disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-90 transition',
+                )}
+              >
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" /> Saving persona…
+                  </>
+                ) : (
+                  <>
+                    Save persona <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
+              </button>
+
+              {manualSuccess && (
+                <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 flex items-start gap-3">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                  <p className="text-sm text-emerald-200">{manualSuccess}</p>
+                </div>
+              )}
+            </div>
+          )}
 
           {error && (
             <div className="w-full max-w-md rounded-xl border border-rose-500/20 bg-rose-500/5 p-4 flex items-start gap-3 text-left">
@@ -240,14 +417,28 @@ type OnboardingOptionProps = {
   description: string;
   icon: React.ComponentType<{ className?: string }>;
   primary?: boolean;
+  selected?: boolean;
+  onClick?: () => void;
 };
 
-function OnboardingOption({ title, description, icon: Icon, primary }: OnboardingOptionProps) {
+function OnboardingOption({
+  title,
+  description,
+  icon: Icon,
+  primary,
+  selected,
+  onClick,
+}: OnboardingOptionProps) {
   return (
-    <div
+    <button
+      type="button"
+      onClick={onClick}
       className={cn(
-        'glass rounded-3xl p-8 border border-white/5 hover:border-white/10 transition-all cursor-pointer group relative overflow-hidden',
-        primary && 'bg-gradient-to-br from-primary/5 to-transparent border-primary/20',
+        'text-left glass rounded-3xl p-8 border transition-all group relative overflow-hidden',
+        selected
+          ? 'border-primary/60 ring-2 ring-primary/30'
+          : 'border-white/5 hover:border-white/20',
+        primary && !selected && 'bg-gradient-to-br from-primary/5 to-transparent border-primary/20',
       )}
     >
       {primary && (
@@ -265,7 +456,7 @@ function OnboardingOption({ title, description, icon: Icon, primary }: Onboardin
       </div>
       <h3 className="text-xl font-bold mb-2 group-hover:text-primary transition-colors">{title}</h3>
       <p className="text-sm text-dim leading-relaxed">{description}</p>
-    </div>
+    </button>
   );
 }
 

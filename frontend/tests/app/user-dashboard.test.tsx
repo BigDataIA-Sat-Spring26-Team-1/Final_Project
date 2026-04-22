@@ -11,13 +11,13 @@ import UserDashboard from '@/app/user/page';
 describe('UserDashboard page', () => {
   it('prompts for a user id before fetching anything', () => {
     render(<UserDashboard />);
-    expect(screen.getByText(/enter a user id to load your personalized feed/i)).toBeInTheDocument();
+    expect(screen.getByText(/pick a user from the dropdown to load your personalized feed/i)).toBeInTheDocument();
   });
 
   it('loads persona + recommendations once a user id is entered', async () => {
     render(<UserDashboard />);
 
-    fireEvent.change(screen.getByPlaceholderText(/^user id$/i), {
+    fireEvent.change(screen.getByPlaceholderText(/paste a user id/i), {
       target: { value: 'user-42' },
     });
 
@@ -35,7 +35,7 @@ describe('UserDashboard page', () => {
     const user = userEvent.setup();
     render(<UserDashboard />);
 
-    fireEvent.change(screen.getByPlaceholderText(/^user id$/i), {
+    fireEvent.change(screen.getByPlaceholderText(/paste a user id/i), {
       target: { value: 'user-42' },
     });
     await waitFor(() =>

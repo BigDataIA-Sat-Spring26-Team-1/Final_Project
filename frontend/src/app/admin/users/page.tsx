@@ -1,10 +1,9 @@
 'use client';
 
-// User management. The list view requires a backend endpoint that doesn't
-// exist yet (no GET /api/v1/users), so this page acts as a single-record
-// inspector instead: the admin types in a user_id and we pull the persona via
-// the existing /personas/{user_id} read. The placeholder list rows are kept
-// to communicate the intended UX once the list endpoint lands.
+// User management. Lookup field pulls a specific user's persona via
+// /personas/{user_id}; the roster table below is driven by /admin/users and
+// lists every tenant. Click-on-row pre-fills the lookup so an admin can drill
+// down without copy-pasting ids.
 
 import {
   ChevronRight,
@@ -18,7 +17,13 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 
 import { PageWrapper } from '@/components/PageWrapper';
-import { ApiError, getPersona, type StoredPersona } from '@/lib/api';
+import {
+  ApiError,
+  getPersona,
+  listUsers,
+  type StoredPersona,
+  type UserListItem,
+} from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 export default function AdminUsersPage() {
@@ -26,6 +31,26 @@ export default function AdminUsersPage() {
   const [persona, setPersona] = useState<StoredPersona | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [users, setUsers] = useState<UserListItem[] | null>(null);
+  const [rosterError, setRosterError] = useState<string | null>(null);
+
+  // Load the roster once on mount. Small page — 100 rows is plenty for the
+  // demo window; we'll add proper pagination once it stops fitting.
+  useEffect(() => {
+    const controller = new AbortController();
+    listUsers(100, 0, controller.signal)
+      .then((r) => setUsers(r.results))
+      .catch((err) => {
+        if ((err as Error).name === 'AbortError') return;
+        setRosterError(
+          err instanceof ApiError
+            ? `${err.status}: ${err.detail ?? err.message}`
+            : (err as Error).message,
+        );
+      });
+    return () => controller.abort();
+  }, []);
 
   // Auto-load when the input contains a non-empty id (debounced via abort).
   useEffect(() => {
@@ -110,23 +135,66 @@ export default function AdminUsersPage() {
           ) : null}
         </div>
 
-        {/* Bulk listing placeholder — kept visible so reviewers see the intended
-            UX. Once /api/v1/users lands the rows below get replaced by a real
-            paginated table mirroring the schema. */}
+        {/* Full roster driven by /admin/users. */}
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <h2 className="text-xs font-black uppercase tracking-widest text-dim">
               Full User Roster
             </h2>
-            <span className="text-[10px] uppercase tracking-widest font-bold text-amber-400">
-              pending /api/v1/users endpoint
+            <span className="text-[10px] uppercase tracking-widest font-bold text-dim">
+              {users ? `${users.length} users` : 'loading…'}
             </span>
           </div>
-          <div className="glass rounded-3xl border border-dashed border-white/10 p-12 text-center text-sm text-dim italic">
-            The bulk roster will render here once Abhinav&apos;s list endpoint is
-            available. Use the lookup field above to inspect users by id in
-            the meantime.
-          </div>
+
+          {rosterError ? (
+            <div className="glass rounded-3xl border border-rose-500/20 p-6 flex items-start gap-3 text-rose-200">
+              <TriangleAlert className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+              <p className="text-sm">{rosterError}</p>
+            </div>
+          ) : users === null ? (
+            <div className="glass rounded-3xl border border-white/10 p-12 text-center text-sm text-dim flex items-center justify-center gap-3">
+              <Loader2 className="w-4 h-4 animate-spin" /> Loading roster…
+            </div>
+          ) : users.length === 0 ? (
+            <div className="glass rounded-3xl border border-white/10 p-12 text-center text-sm text-dim italic">
+              No users yet. Create one from the Admin Console.
+            </div>
+          ) : (
+            <div className="glass rounded-3xl border border-white/5 overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-[10px] uppercase tracking-widest text-dim border-b border-white/5">
+                    <th className="text-left font-bold px-6 py-3">Email</th>
+                    <th className="text-left font-bold px-6 py-3">Full name</th>
+                    <th className="text-left font-bold px-6 py-3">Joined</th>
+                    <th className="text-left font-bold px-6 py-3 font-mono">ID</th>
+                    <th className="px-6 py-3" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {users.map((u) => (
+                    <tr
+                      key={u.id}
+                      className="border-b border-white/5 hover:bg-white/5 cursor-pointer transition"
+                      onClick={() => setUserId(u.id)}
+                    >
+                      <td className="px-6 py-3 font-medium">{u.email}</td>
+                      <td className="px-6 py-3 text-dim">{u.full_name ?? '—'}</td>
+                      <td className="px-6 py-3 text-dim">
+                        {new Date(u.created_at).toLocaleDateString()}
+                      </td>
+                      <td className="px-6 py-3 text-dim font-mono text-xs truncate max-w-[160px]">
+                        {u.id}
+                      </td>
+                      <td className="px-6 py-3 text-right">
+                        <ChevronRight className="w-4 h-4 text-dim inline" />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </div>
     </PageWrapper>

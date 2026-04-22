@@ -32,14 +32,19 @@ type Row = {
   isNegative: boolean;
 };
 
+// Default the trend view to "all time" — explicit date filter lets admins
+// rewind to a specific historical window without dropping today's data.
+const ALL_TIME = '';
+
 export default function AdminTrendsPage() {
   const [trends, setTrends] = useState<TrendCluster[]>([]);
   const [filter, setFilter] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [date, setDate] = useState<string>(ALL_TIME);
 
   useEffect(() => {
     const controller = new AbortController();
-    getTopTrends(30, undefined, controller.signal)
+    getTopTrends(30, undefined, controller.signal, date || undefined)
       .then((r) => setTrends(r.results))
       .catch((err) => {
         if (err.name === 'AbortError') return;
@@ -50,7 +55,7 @@ export default function AdminTrendsPage() {
         );
       });
     return () => controller.abort();
-  }, []);
+  }, [date]);
 
   const dominant = trends[0];
 
@@ -146,7 +151,25 @@ export default function AdminTrendsPage() {
         <div className="glass rounded-[2.5rem] border border-white/5 overflow-hidden">
           <div className="p-8 border-b border-white/5 flex items-center justify-between bg-white/[0.01] flex-wrap gap-3">
             <h3 className="text-xl font-bold">Emerging Topics &amp; Entity Velocity</h3>
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-4 flex-wrap">
+              <label className="flex items-center gap-2 text-xs text-dim">
+                <span className="uppercase tracking-widest font-bold">date</span>
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
+                  max={new Date().toISOString().slice(0, 10)}
+                  className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs outline-none focus:border-primary/40 font-mono"
+                />
+                {date && (
+                  <button
+                    onClick={() => setDate(ALL_TIME)}
+                    className="text-[10px] uppercase tracking-widest text-dim hover:text-white font-bold"
+                  >
+                    clear
+                  </button>
+                )}
+              </label>
               <div className="flex items-center glass rounded-xl px-4 py-2 border border-white/5">
                 <Search className="w-4 h-4 text-dim mr-2" />
                 <input

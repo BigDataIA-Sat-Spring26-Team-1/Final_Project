@@ -64,6 +64,14 @@ async def get_top_trends(
         None,
         description="Optional trend_status filter (BREAKING, TRENDING, VIRAL, …).",
     ),
+    date: Optional[str] = Query(
+        None,
+        description=(
+            "Optional YYYY-MM-DD filter on the cluster's created_at. Useful "
+            "for historical views: pass yesterday to see what was trending "
+            "when the last batch ran."
+        ),
+    ),
     db: SnowflakeConnection = Depends(get_db_connection),
 ) -> Dict[str, Any]:  # noqa: the mixed shape (total:int, results:list) would trip FastAPI's response validation under a stricter annotation.
     """Return the top-N most-trending clusters from the last ranking pass.
@@ -92,6 +100,10 @@ async def get_top_trends(
     if status:
         query += " AND UPPER(trend_status) = UPPER(%s)"
         params.append(status)
+    if date:
+        # created_at is a TIMESTAMP_NTZ; cast to DATE for an index-friendly compare.
+        query += " AND CAST(created_at AS DATE) = %s"
+        params.append(date)
     query += " ORDER BY final_trend_score DESC NULLS LAST LIMIT %s"
     params.append(limit)
 

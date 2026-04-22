@@ -19,7 +19,9 @@ import { PageWrapper } from '@/components/PageWrapper';
 import {
   ApiError,
   generateB2BReport,
+  listCompanies,
   type B2BReportResponse,
+  type CompanyListItem,
 } from '@/lib/api';
 import {
   getLastCompanyId,
@@ -34,6 +36,24 @@ export default function AdminCompaniesPage() {
   const [generatedAt, setGeneratedAt] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [companies, setCompanies] = useState<CompanyListItem[] | null>(null);
+  const [rosterError, setRosterError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    listCompanies(100, 0, controller.signal)
+      .then((r) => setCompanies(r.results))
+      .catch((err) => {
+        if ((err as Error).name === 'AbortError') return;
+        setRosterError(
+          err instanceof ApiError
+            ? `${err.status}: ${err.detail ?? err.message}`
+            : (err as Error).message,
+        );
+      });
+    return () => controller.abort();
+  }, []);
 
   // Hydrate from cache (sessionStorage) — set by /seo or /company/drafts.
   useEffect(() => {
@@ -182,15 +202,62 @@ export default function AdminCompaniesPage() {
             <h2 className="text-xs font-black uppercase tracking-widest text-dim">
               Full Client Roster
             </h2>
-            <span className="text-[10px] uppercase tracking-widest font-bold text-amber-400">
-              pending /api/v1/companies endpoint
+            <span className="text-[10px] uppercase tracking-widest font-bold text-dim">
+              {companies ? `${companies.length} clients` : 'loading…'}
             </span>
           </div>
-          <div className="glass rounded-3xl border border-dashed border-white/10 p-12 text-center text-sm text-dim italic">
-            The full enterprise roster will render here once the list endpoint
-            is available. Use the lookup above to inspect individual clients
-            in the meantime.
-          </div>
+
+          {rosterError ? (
+            <div className="glass rounded-3xl border border-rose-500/20 p-6 flex items-start gap-3 text-rose-200">
+              <TriangleAlert className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+              <p className="text-sm">{rosterError}</p>
+            </div>
+          ) : companies === null ? (
+            <div className="glass rounded-3xl border border-white/10 p-12 text-center text-sm text-dim flex items-center justify-center gap-3">
+              <Loader2 className="w-4 h-4 animate-spin" /> Loading roster…
+            </div>
+          ) : companies.length === 0 ? (
+            <div className="glass rounded-3xl border border-white/10 p-12 text-center text-sm text-dim italic">
+              No companies yet. Create one from the Admin Console.
+            </div>
+          ) : (
+            <div className="glass rounded-3xl border border-white/5 overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-[10px] uppercase tracking-widest text-dim border-b border-white/5">
+                    <th className="text-left font-bold px-6 py-3">Name</th>
+                    <th className="text-left font-bold px-6 py-3">Industry</th>
+                    <th className="text-left font-bold px-6 py-3">Domain</th>
+                    <th className="text-left font-bold px-6 py-3">Created</th>
+                    <th className="text-left font-bold px-6 py-3 font-mono">ID</th>
+                    <th className="px-6 py-3" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {companies.map((c) => (
+                    <tr
+                      key={c.id}
+                      className="border-b border-white/5 hover:bg-white/5 cursor-pointer transition"
+                      onClick={() => setCompanyId(c.id)}
+                    >
+                      <td className="px-6 py-3 font-medium">{c.name}</td>
+                      <td className="px-6 py-3 text-dim">{c.industry ?? '—'}</td>
+                      <td className="px-6 py-3 text-dim">{c.domain ?? '—'}</td>
+                      <td className="px-6 py-3 text-dim">
+                        {new Date(c.created_at).toLocaleDateString()}
+                      </td>
+                      <td className="px-6 py-3 text-dim font-mono text-xs truncate max-w-[160px]">
+                        {c.id}
+                      </td>
+                      <td className="px-6 py-3 text-right">
+                        <ChevronRight className="w-4 h-4 text-dim inline" />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </div>
     </PageWrapper>
