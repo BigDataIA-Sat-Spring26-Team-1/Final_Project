@@ -107,6 +107,8 @@ async def test_results_pass_through_qdrant_hits():
         "cluster_id": "cluster-1",
         "score": 0.8123,
         "title": "Headline",
+        "url": "",
+        "summary": "",
         "sources": ["S1"],
         "cluster_size": 3,
     }
