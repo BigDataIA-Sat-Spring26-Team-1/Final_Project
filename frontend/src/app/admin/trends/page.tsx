@@ -32,7 +32,6 @@ type Row = {
   deltaPct: number;
   isNegative: boolean;
   createdAt: string | null;
-  isNew: boolean;
 };
 
 // Default the trend view to yesterday so the admin sees the most recent
@@ -77,18 +76,15 @@ export default function AdminTrendsPage() {
   }, [trends]);
 
   // Real temporal velocity: articles that rolled into the cluster on the
-  // selected day vs the day before. 0→N shows as "new" rather than +Inf%.
+  // selected day vs the day before. For a zero base we fall back to curr×100
+  // so 0→3 reads as +300% instead of swallowing the delta behind a "NEW" chip.
   const rows: Row[] = useMemo(
     () =>
       trends.map((t) => {
         const prev = t.prev_day_count;
         const curr = t.curr_day_count;
         const deltaPct =
-          prev === 0
-            ? curr > 0
-              ? 100
-              : 0
-            : Math.round(((curr - prev) / prev) * 100);
+          prev === 0 ? curr * 100 : Math.round(((curr - prev) / prev) * 100);
         return {
           id: t.cluster_id,
           name: t.title,
@@ -100,7 +96,6 @@ export default function AdminTrendsPage() {
           deltaPct,
           isNegative: deltaPct < 0,
           createdAt: t.created_at,
-          isNew: prev === 0 && curr > 0,
         };
       }),
     [trends],
@@ -263,17 +258,11 @@ function TrendRow({ row }: { row: Row }) {
       <td
         className={cn(
           'px-8 py-6 text-right font-black',
-          row.isNew ? 'text-emerald-400' : row.isNegative ? 'text-red-500' : 'text-emerald-500',
+          row.isNegative ? 'text-red-500' : 'text-emerald-500',
         )}
       >
-        {row.isNew ? (
-          'NEW'
-        ) : (
-          <>
-            {row.deltaPct >= 0 ? '+' : ''}
-            {row.deltaPct}% {row.isNegative ? '↓' : '↑'}
-          </>
-        )}
+        {row.deltaPct >= 0 ? '+' : ''}
+        {row.deltaPct}% {row.isNegative ? '↓' : '↑'}
       </td>
     </tr>
   );
