@@ -1,8 +1,6 @@
-from typing import Dict, Any, Callable
-from functools import wraps
-import time
+from typing import Dict, Any
 from langgraph.graph import END
-from app.services.agent_base import create_base_graph, AgentState, BaseAgentService
+from app.services.agent_base import create_base_graph, AgentState, BaseAgentService, track_node_latency
 from app.core.logging_conf import get_logger
 
 from app.db.snowflake import get_db_connection
@@ -12,18 +10,6 @@ from app.core.metrics import LANGGRAPH_NODE_LATENCY, NEWSLETTER_REJECTIONS_TOTAL
 
 logger = get_logger("app.services.b2c_agent")
 
-def track_node_latency(node_func: Callable):
-    """Decorator to record LangGraph node execution time into Prometheus."""
-    @wraps(node_func)
-    async def wrapper(state: AgentState, *args, **kwargs):
-        start = time.perf_counter()
-        result = await node_func(state, *args, **kwargs)
-        duration = time.perf_counter() - start
-        
-        # Record to Prometheus (Task 21)
-        LANGGRAPH_NODE_LATENCY.labels(node_name=node_func.__name__).observe(duration)
-        return result
-    return wrapper
 
 @track_node_latency
 async def initialize_state(state: AgentState) -> Dict[str, Any]:

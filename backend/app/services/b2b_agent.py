@@ -1,6 +1,6 @@
 from typing import Dict, Any
 from langgraph.graph import END
-from app.services.agent_base import create_base_graph, AgentState, BaseAgentService
+from app.services.agent_base import create_base_graph, AgentState, BaseAgentService, track_node_latency
 from app.core.logging_conf import get_logger
 
 from app.db.snowflake import get_db_connection
@@ -9,6 +9,7 @@ from app.services.search import SearchService
 logger = get_logger("app.services.b2b_agent")
 
 
+@track_node_latency
 async def initialize_state(state: AgentState) -> Dict[str, Any]:
     """
     Step 1: Set up the Enterprise context (Industry, Competitors).
@@ -17,6 +18,7 @@ async def initialize_state(state: AgentState) -> Dict[str, Any]:
     return {"status": "INITIALIZED"}
 
 
+@track_node_latency
 async def extract_intelligence(state: AgentState) -> Dict[str, Any]:
     """
     Step 2: Deep search for social signals and cluster weights.
@@ -94,6 +96,7 @@ async def extract_intelligence(state: AgentState) -> Dict[str, Any]:
     }
 
 
+@track_node_latency
 async def generate_report(state: AgentState) -> Dict[str, Any]:
     """
     Step 3: Generate high-level Executive Summary (Markdown).
