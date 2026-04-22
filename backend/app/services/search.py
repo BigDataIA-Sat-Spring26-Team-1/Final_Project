@@ -81,6 +81,8 @@ class SearchService:
                 "cluster_id": str(hit.id),
                 "score": round(hit.score, 4),
                 "title": hit.payload.get("title", ""),
+                "url": hit.payload.get("url", ""),
+                "summary": hit.payload.get("summary", ""),
                 "sources": hit.payload.get("sources", []),
                 "cluster_size": hit.payload.get("cluster_size", 1)
             })

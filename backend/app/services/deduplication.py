@@ -138,25 +138,37 @@ class DeduplicationService:
 
         logger.info("Semantic clustering formed", cluster_count=len(clusters))
         
-        # 3. Optional: Insert clusters/representatives directly into Qdrant for routing
-        # Background indexing logic
+        # 3. Index cluster representatives into Qdrant for routing/search.
+        # Batched because Qdrant Cloud caps single-request payloads at 32 MB —
+        # 1536-dim float vectors are ~6 KB each, so 500 points ≈ 3 MB payload
+        # which stays well under the limit even with generous JSON overhead.
         try:
             client = get_qdrant_client()
-            points = []
-            for cluster in clusters:
-                rep = cluster[0]
-                points.append(PointStruct(
-                    # Using the first article's ID as the vector ID. Convert to UUID if necessary.
-                    id=str(rep['id']),
-                    vector=rep['_embedding'],
+            points = [
+                PointStruct(
+                    # The representative raw article's id doubles as the vector id.
+                    id=str(cluster[0]['id']),
+                    vector=cluster[0]['_embedding'],
                     payload={
-                        "title": rep.get('title', ''),
-                        "sources": rep.get('_all_sources', []),
-                        "cluster_size": len(cluster)
-                    }
-                ))
+                        "title": cluster[0].get('title', ''),
+                        # Source URL of the representative so the frontend
+                        # can deep-link from a recommendation card straight
+                        # to the original publisher's page.
+                        "url": cluster[0].get('url', ''),
+                        "summary": cluster[0].get('summary', ''),
+                        "sources": cluster[0].get('_all_sources', []),
+                        "cluster_size": len(cluster),
+                    },
+                )
+                for cluster in clusters
+            ]
+            batch_size = 500
+            for i in range(0, len(points), batch_size):
+                client.upsert(
+                    collection_name="articles",
+                    points=points[i : i + batch_size],
+                )
             if points:
-                client.upsert(collection_name="articles", points=points)
                 logger.info("Ingested cluster representatives into Qdrant", points=len(points))
         except Exception as e:
             logger.error("Failed to index clusters in Qdrant", error=str(e))

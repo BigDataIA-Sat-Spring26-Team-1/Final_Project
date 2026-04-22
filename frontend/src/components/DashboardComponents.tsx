@@ -303,7 +303,19 @@ export function FeedableArticleRow({
               </>
             )}
           </div>
-          <h4 className="text-base font-semibold truncate leading-tight">{article.title}</h4>
+          {article.url ? (
+            <a
+              href={article.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-base font-semibold leading-tight hover:text-primary transition-colors block truncate"
+              title="Open source article in a new tab"
+            >
+              {article.title}
+            </a>
+          ) : (
+            <h4 className="text-base font-semibold truncate leading-tight">{article.title}</h4>
+          )}
           {article.summary && (
             <p className="text-xs text-muted-foreground line-clamp-2">{article.summary}</p>
           )}

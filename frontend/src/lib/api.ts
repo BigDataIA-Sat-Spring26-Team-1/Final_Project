@@ -209,6 +209,8 @@ export interface RankedArticle {
   cluster_id: string;
   title: string;
   summary?: string;
+  /** Source URL of the representative article in the cluster. */
+  url?: string;
   score: number;
   cluster_size?: number;
   categories?: Record<string, number>;
