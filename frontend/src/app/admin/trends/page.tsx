@@ -14,6 +14,7 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 
 import { PageWrapper } from '@/components/PageWrapper';
+import { Spinner } from '@/components/Spinner';
 import {
   ApiError,
   getTopTrends,
@@ -50,19 +51,27 @@ export default function AdminTrendsPage() {
   const [filter, setFilter] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [date, setDate] = useState<string>(yesterdayIso());
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const controller = new AbortController();
-    getTopTrends(30, undefined, controller.signal, date || undefined)
-      .then((r) => setTrends(r.results))
-      .catch((err) => {
-        if (err.name === 'AbortError') return;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const r = await getTopTrends(30, undefined, controller.signal, date || undefined);
+        setTrends(r.results);
+      } catch (err) {
+        if ((err as Error).name === 'AbortError') return;
         setError(
           err instanceof ApiError
             ? `${err.status}: ${err.detail ?? err.message}`
             : (err as Error).message,
         );
-      });
+      } finally {
+        setLoading(false);
+      }
+    })();
     return () => controller.abort();
   }, [date]);
 
@@ -135,10 +144,12 @@ export default function AdminTrendsPage() {
               <h3 className="font-bold uppercase tracking-widest text-xs">Primary Signal</h3>
             </div>
             <h4 className="text-3xl font-black">
-              {dominant ? truncate(dominant.title, 48) : '—'}
+              {loading ? <Spinner /> : dominant ? truncate(dominant.title, 48) : '—'}
             </h4>
             <p className="text-dim">
-              {dominant
+              {loading
+                ? 'Loading latest ranked snapshot…'
+                : dominant
                 ? `Top-ranked cluster across ${dominant.cluster_size} sources, status ${
                     dominant.trend_status ?? 'REGULAR'
                   }.`
@@ -152,7 +163,7 @@ export default function AdminTrendsPage() {
               <h3 className="font-bold uppercase tracking-widest text-xs">Data Reliability</h3>
             </div>
             <h4 className="text-3xl font-black">
-              {reliability !== null ? `${reliability}% verified` : '—'}
+              {loading ? <Spinner /> : reliability !== null ? `${reliability}% verified` : '—'}
             </h4>
             <p className="text-dim">
               Share of ranked clusters with at least two independent sources confirming the story.
@@ -209,16 +220,22 @@ export default function AdminTrendsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
-                {filtered.length === 0 && (
+                {loading && (
+                  <tr>
+                    <td colSpan={7} className="px-8 py-10 text-center">
+                      <Spinner label="Loading clusters" />
+                    </td>
+                  </tr>
+                )}
+                {!loading && filtered.length === 0 && (
                   <tr>
                     <td colSpan={7} className="px-8 py-10 text-center text-dim italic">
                       No clusters match the current filter.
                     </td>
                   </tr>
                 )}
-                {filtered.map((r) => (
-                  <TrendRow key={r.id} row={r} />
-                ))}
+                {!loading &&
+                  filtered.map((r) => <TrendRow key={r.id} row={r} />)}
               </tbody>
             </table>
           </div>

@@ -13,7 +13,6 @@
 
 import {
   Calendar,
-  CheckCircle2,
   Eye,
   Loader2,
   Mail,
@@ -249,7 +248,9 @@ export default function AdminNewslettersPage() {
             <div className="glass rounded-3xl border border-white/5 overflow-hidden">
               <div className="px-6 py-4 border-b border-white/5 flex items-center justify-between">
                 <span className="text-[10px] uppercase tracking-widest font-bold text-dim">Newsletters</span>
-                <span className="text-xs text-dim font-mono">{newsletters?.length ?? '—'} items</span>
+                <span className="text-xs text-dim font-mono">
+                  {newsletters === null ? <Loader2 className="w-3 h-3 animate-spin inline" /> : `${newsletters.length} items`}
+                </span>
               </div>
               {newsletters === null ? (
                 <div className="p-8 text-center text-sm text-dim flex items-center justify-center gap-3">
@@ -282,7 +283,9 @@ export default function AdminNewslettersPage() {
             <div className="glass rounded-3xl border border-white/5 overflow-hidden">
               <div className="px-6 py-4 border-b border-white/5 flex items-center justify-between">
                 <span className="text-[10px] uppercase tracking-widest font-bold text-dim">B2B Briefs</span>
-                <span className="text-xs text-dim font-mono">{briefs?.length ?? '—'} items</span>
+                <span className="text-xs text-dim font-mono">
+                  {briefs === null ? <Loader2 className="w-3 h-3 animate-spin inline" /> : `${briefs.length} items`}
+                </span>
               </div>
               {briefs === null ? (
                 <div className="p-8 text-center text-sm text-dim flex items-center justify-center gap-3">
