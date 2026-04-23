@@ -16,9 +16,13 @@ substitutions:
   _SERVICE: curateai-frontend
   _RUNTIME_SA: curateai-frontend-sa@gen-lang-client-0720834968.iam.gserviceaccount.com
 
-  # Replace per deploy. Points at the backend Cloud Run service URL with no
-  # trailing slash. api.ts defaults to this when no env override is present.
-  _BACKEND_URL: https://REPLACE-ME.run.app
+  # Points at the backend Cloud Run service URL with no trailing slash.
+  # Baked into the client bundle at build time (Next.js inlines every
+  # NEXT_PUBLIC_* var during `next build`) AND set as a runtime env on the
+  # Cloud Run service for debugging. Override per environment with
+  # `--substitutions=_BACKEND_URL=https://your-backend…run.app` when
+  # deploying against a non-prod backend.
+  _BACKEND_URL: https://curateai-backend-sjhg7huf4q-uc.a.run.app
 
 steps:
   # 1) Build with layer cache. The build arg surfaces the backend URL to
