@@ -43,6 +43,11 @@ dependencies = [
     # FastMCP lives in the base package; no extras needed.
     "mcp>=1.2.1",
     "spacy>=3.8.14",
+    # Pin the English small model as a direct dependency. `spacy download`
+    # side-loads the wheel into the venv but uv.lock can't track that, so a
+    # clean Cloud Build rebuild would miss the model. Sourcing the wheel
+    # straight from the GitHub release makes it reproducible.
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
 ]
 
 [project.optional-dependencies]
