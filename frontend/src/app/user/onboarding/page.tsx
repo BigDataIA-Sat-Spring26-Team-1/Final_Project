@@ -8,31 +8,33 @@
 import {
   ArrowRight,
   CheckCircle2,
-  FileText,
   FileUp,
-  Link,
+  Link as LinkIcon,
   Loader2,
   ShieldCheck,
   Sparkles,
   TriangleAlert,
 } from 'lucide-react';
-import { useRef, useState } from 'react';
+import NextLink from 'next/link';
+import { useEffect, useRef, useState } from 'react';
 
 import { PageWrapper } from '@/components/PageWrapper';
+import { Spinner } from '@/components/Spinner';
 import {
   ApiError,
   createManualPersona,
   extractPersonas,
+  getPersona,
   type BatchPersonaResponse,
   type PersonaExtractionResult,
   type SinglePersonaExtractionResponse,
+  type StoredPersona,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
-// Three ways to land a persona. LinkedIn + Resume share the extract endpoint —
-// the backend parser doesn't actually care about the label. Manual is the
-// click-path that avoids the LLM extractor entirely.
-type OnboardingMode = 'linkedin' | 'resume' | 'manual';
+// Two ways to land a persona: LinkedIn PDF (LLM extractor) or a manual
+// click-path that writes the weights directly.
+type OnboardingMode = 'linkedin' | 'manual';
 
 const CATEGORY_TAXONOMY: { key: string; label: string }[] = [
   { key: 'llms', label: 'LLMs' },
@@ -69,6 +71,40 @@ export default function UserOnboarding() {
     Object.fromEntries(CATEGORY_TAXONOMY.map(({ key }) => [key, 0])),
   );
   const [manualSuccess, setManualSuccess] = useState<string | null>(null);
+
+  // Existing-persona probe — if the user id already has a persona we disable
+  // the submission paths and point the user at /user/persona to edit instead.
+  const [existingPersona, setExistingPersona] = useState<StoredPersona | null>(null);
+  const [checkingPersona, setCheckingPersona] = useState(false);
+
+  useEffect(() => {
+    const id = userId.trim();
+    if (!id) {
+      setExistingPersona(null);
+      return;
+    }
+    const controller = new AbortController();
+    (async () => {
+      setCheckingPersona(true);
+      setExistingPersona(null);
+      try {
+        const p = await getPersona(id, controller.signal);
+        setExistingPersona(p);
+      } catch (err) {
+        if ((err as Error).name === 'AbortError') return;
+        if (err instanceof ApiError && err.status === 404) {
+          setExistingPersona(null);
+        }
+        // Other errors are non-fatal — leave existingPersona null and let the
+        // main submission surface handle any real API problem.
+      } finally {
+        setCheckingPersona(false);
+      }
+    })();
+    return () => controller.abort();
+  }, [userId]);
+
+  const alreadyOnboarded = Boolean(existingPersona);
 
   const handleManualSubmit = async () => {
     if (!userId.trim()) {
@@ -165,21 +201,41 @@ export default function UserOnboarding() {
           </p>
         </header>
 
+        {checkingPersona && (
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-dim flex items-center gap-3">
+            <Spinner size="sm" /> Checking if this user is already onboarded…
+          </div>
+        )}
+
+        {alreadyOnboarded && !checkingPersona && (
+          <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5 flex items-start gap-3">
+            <ShieldCheck className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+            <div className="space-y-2 flex-1">
+              <p className="text-sm font-bold text-amber-200">
+                This user already has a persona.
+              </p>
+              <p className="text-xs text-amber-300/80">
+                Onboarding runs only for brand-new accounts. Edit the existing profile from the
+                persona page instead.
+              </p>
+              <NextLink
+                href="/user/persona"
+                className="inline-block text-xs font-black uppercase tracking-widest text-amber-400 hover:underline"
+              >
+                Go to persona editor →
+              </NextLink>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
           <OnboardingOption
             title="LinkedIn PDF"
             description="Upload your exported LinkedIn profile to automatically extract entities and skills."
-            icon={Link}
+            icon={LinkIcon}
             selected={mode === 'linkedin'}
             primary
             onClick={() => setMode('linkedin')}
-          />
-          <OnboardingOption
-            title="Resume / CV"
-            description="Upload a standard PDF resume for deep scanning of your professional background."
-            icon={FileText}
-            selected={mode === 'resume'}
-            onClick={() => setMode('resume')}
           />
           <OnboardingOption
             title="Manual Setup"
@@ -188,24 +244,16 @@ export default function UserOnboarding() {
             selected={mode === 'manual'}
             onClick={() => setMode('manual')}
           />
-          <div className="glass rounded-3xl p-8 border border-white/5 flex flex-col items-center justify-center space-y-4 text-center">
-            <div className="p-3 bg-white/5 rounded-full">
-              <ShieldCheck className="w-6 h-6 text-emerald-400" />
-            </div>
-            <p className="text-xs text-dim lowercase font-mono">End-to-end encrypted storage of profile data.</p>
-          </div>
         </div>
 
         <div className="glass rounded-[2.5rem] p-12 border border-white/5 flex flex-col items-center text-center space-y-8 bg-gradient-to-b from-white/[0.02] to-transparent">
           <div className="space-y-2">
             <h3 className="text-2xl font-bold">
-              {mode === 'manual' ? 'Manual Persona Setup' : mode === 'resume' ? 'Resume Upload' : 'LinkedIn Upload'}
+              {mode === 'manual' ? 'Manual Persona Setup' : 'LinkedIn Upload'}
             </h3>
             <p className="text-dim">
               {mode === 'manual'
                 ? 'Fill in your role and dial the category weights to tell CurateAI what to surface.'
-                : mode === 'resume'
-                ? 'Drop a standard PDF resume here; the extractor pulls role, seniority, and interest weights.'
                 : 'Drop your LinkedIn-exported PDF here; the extractor turns it into a structured persona.'}
             </p>
           </div>
@@ -270,7 +318,8 @@ export default function UserOnboarding() {
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={isSubmitting || files.length === 0}
+            disabled={isSubmitting || files.length === 0 || alreadyOnboarded}
+            title={alreadyOnboarded ? 'This user already has a persona.' : undefined}
             className={cn(
               'px-8 py-3 rounded-xl font-bold bg-primary text-primary-foreground',
               'flex items-center gap-2',
@@ -363,7 +412,10 @@ export default function UserOnboarding() {
               <button
                 type="button"
                 onClick={handleManualSubmit}
-                disabled={isSubmitting || !userId.trim() || !manualJobTitle.trim()}
+                disabled={
+                  isSubmitting || !userId.trim() || !manualJobTitle.trim() || alreadyOnboarded
+                }
+                title={alreadyOnboarded ? 'This user already has a persona.' : undefined}
                 className={cn(
                   'w-full px-8 py-3 rounded-xl font-bold bg-primary text-primary-foreground',
                   'flex items-center justify-center gap-2',

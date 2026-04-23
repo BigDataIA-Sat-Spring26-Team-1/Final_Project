@@ -14,6 +14,7 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 
 import { PageWrapper } from '@/components/PageWrapper';
+import { Spinner } from '@/components/Spinner';
 import {
   ApiError,
   getTopTrends,
@@ -32,6 +33,8 @@ type Row = {
   deltaPct: number;
   isNegative: boolean;
   createdAt: string | null;
+  url?: string | null;
+  sourceName?: string | null;
 };
 
 // Default the trend view to yesterday so the admin sees the most recent
@@ -50,19 +53,28 @@ export default function AdminTrendsPage() {
   const [filter, setFilter] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [date, setDate] = useState<string>(yesterdayIso());
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const controller = new AbortController();
-    getTopTrends(30, undefined, controller.signal, date || undefined)
-      .then((r) => setTrends(r.results))
-      .catch((err) => {
-        if (err.name === 'AbortError') return;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const r = await getTopTrends(30, undefined, controller.signal, date || undefined);
+        if (controller.signal.aborted) return;
+        setTrends(r.results);
+      } catch (err) {
+        if ((err as Error).name === 'AbortError') return;
         setError(
           err instanceof ApiError
             ? `${err.status}: ${err.detail ?? err.message}`
             : (err as Error).message,
         );
-      });
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    })();
     return () => controller.abort();
   }, [date]);
 
@@ -96,6 +108,8 @@ export default function AdminTrendsPage() {
           deltaPct,
           isNegative: deltaPct < 0,
           createdAt: t.created_at,
+          url: t.url,
+          sourceName: t.source_name,
         };
       }),
     [trends],
@@ -135,10 +149,12 @@ export default function AdminTrendsPage() {
               <h3 className="font-bold uppercase tracking-widest text-xs">Primary Signal</h3>
             </div>
             <h4 className="text-3xl font-black">
-              {dominant ? truncate(dominant.title, 48) : '—'}
+              {loading ? <Spinner /> : dominant ? truncate(dominant.title, 48) : '—'}
             </h4>
             <p className="text-dim">
-              {dominant
+              {loading
+                ? 'Loading latest ranked snapshot…'
+                : dominant
                 ? `Top-ranked cluster across ${dominant.cluster_size} sources, status ${
                     dominant.trend_status ?? 'REGULAR'
                   }.`
@@ -152,7 +168,7 @@ export default function AdminTrendsPage() {
               <h3 className="font-bold uppercase tracking-widest text-xs">Data Reliability</h3>
             </div>
             <h4 className="text-3xl font-black">
-              {reliability !== null ? `${reliability}% verified` : '—'}
+              {loading ? <Spinner /> : reliability !== null ? `${reliability}% verified` : '—'}
             </h4>
             <p className="text-dim">
               Share of ranked clusters with at least two independent sources confirming the story.
@@ -170,7 +186,7 @@ export default function AdminTrendsPage() {
                   type="date"
                   value={date}
                   onChange={(e) => setDate(e.target.value)}
-                  max={new Date().toISOString().slice(0, 10)}
+                  max={yesterdayIso()}
                   className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs outline-none focus:border-primary/40 font-mono"
                 />
                 {date && (
@@ -209,16 +225,22 @@ export default function AdminTrendsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
-                {filtered.length === 0 && (
+                {loading && (
+                  <tr>
+                    <td colSpan={7} className="px-8 py-10 text-center">
+                      <Spinner label="Loading clusters" />
+                    </td>
+                  </tr>
+                )}
+                {!loading && filtered.length === 0 && (
                   <tr>
                     <td colSpan={7} className="px-8 py-10 text-center text-dim italic">
                       No clusters match the current filter.
                     </td>
                   </tr>
                 )}
-                {filtered.map((r) => (
-                  <TrendRow key={r.id} row={r} />
-                ))}
+                {!loading &&
+                  filtered.map((r) => <TrendRow key={r.id} row={r} />)}
               </tbody>
             </table>
           </div>
@@ -232,10 +254,24 @@ function TrendRow({ row }: { row: Row }) {
   return (
     <tr className="hover:bg-white/[0.02] transition-colors group">
       <td className="px-8 py-6">
-        <p className="font-bold text-white group-hover:text-primary transition-colors">
-          {truncate(row.name, 56)}
+        {row.url ? (
+          <a
+            href={row.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-bold text-white group-hover:text-primary hover:underline transition-colors block"
+            title="Open the representative source article"
+          >
+            {truncate(row.name, 56)}
+          </a>
+        ) : (
+          <p className="font-bold text-white group-hover:text-primary transition-colors">
+            {truncate(row.name, 56)}
+          </p>
+        )}
+        <p className="text-xs text-dim">
+          {row.sourceName ? `${row.sourceName} · ${row.sub}` : row.sub}
         </p>
-        <p className="text-xs text-dim">{row.sub}</p>
       </td>
       <td className="px-8 py-6 text-xs text-dim font-mono whitespace-nowrap">
         {formatDate(row.createdAt)}

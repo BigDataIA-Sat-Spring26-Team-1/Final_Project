@@ -183,6 +183,12 @@ export interface B2CNewsletterResponse {
   status: string;
   html_content: string;
   execution_path_taken: string[];
+  /** True when the backend returned a cached draft rather than regenerating. */
+  already_generated?: boolean;
+  /** ISO timestamp of the persisted draft. */
+  generated_at?: string | null;
+  /** Edition date (YYYY-MM-DD) the draft belongs to. */
+  edition_date?: string | null;
 }
 
 export interface B2BReportRequest {
@@ -193,6 +199,9 @@ export interface B2BReportResponse {
   user_id: string;
   report: string;
   status: string;
+  already_generated?: boolean;
+  generated_at?: string | null;
+  brief_date?: string | null;
 }
 
 export interface IngestionBatchResponse {
@@ -211,6 +220,10 @@ export interface RankedArticle {
   summary?: string;
   /** Source URL of the representative article in the cluster. */
   url?: string;
+  /** Publishers contributing to this cluster (from the Qdrant payload). */
+  sources?: string[];
+  /** Short human-readable source name (populated by the trend snapshot). */
+  source_name?: string | null;
   score: number;
   cluster_size?: number;
   categories?: Record<string, number>;
@@ -248,11 +261,59 @@ export interface TrendCluster {
   curr_day_count: number;
   /** Articles that rolled into this cluster the day before. */
   prev_day_count: number;
+  /** Representative source article URL (LEFT JOINed from articles_raw). */
+  url?: string | null;
+  /** Representative source name. */
+  source_name?: string | null;
 }
 
 export interface TrendTopResponse {
   total: number;
   results: TrendCluster[];
+}
+
+/** Single entity row in the SpaCy keyword-velocity report. */
+export interface KeywordVelocityRow {
+  entity: string;
+  current: number;
+  previous: number;
+  total_mentions: number;
+  velocity_pct: number;
+  status: 'SURGING' | 'STABLE' | 'DECLINING';
+}
+
+export interface KeywordVelocityResponse {
+  target_date: string;
+  previous_date: string;
+  total: number;
+  results: KeywordVelocityRow[];
+}
+
+export function updatePersonaCategories(
+  userId: string,
+  weights: Record<string, number>,
+  signal?: AbortSignal,
+): Promise<{ user_id: string; explicit_category_weights: Record<string, number> }> {
+  return request(
+    `/api/v1/admin/personas/${encodeURIComponent(userId)}/categories`,
+    {
+      method: 'PUT',
+      json: weights,
+      signal,
+    },
+  );
+}
+
+export function getKeywordVelocity(
+  date?: string,
+  topN: number = 30,
+  signal?: AbortSignal,
+): Promise<KeywordVelocityResponse> {
+  return request<KeywordVelocityResponse>('/api/v1/b2b/keyword-velocity', {
+    method: 'GET',
+    query: { date, top_n: topN },
+    signal,
+  });
 }
 
 /** Returned by GET /api/v1/personas/{user_id}. */

@@ -186,6 +186,43 @@ async def update_persona(
     return {"user_id": user_id, "status": "updated"}
 
 
+@router.put("/personas/{user_id}/categories")
+async def update_persona_categories(
+    user_id: str,
+    payload: Dict[str, float],
+    db: SnowflakeConnection = Depends(get_db_connection),
+) -> Dict[str, Any]:
+    """Overwrite the explicit category weights for a user.
+
+    This is the "pick your interests" surface — the persona page sends a
+    dictionary of {category: weight}. We normalise values to [0, 1] and drop
+    anything below a 0.01 noise floor so the stored taxonomy stays clean.
+    """
+    cleaned: Dict[str, float] = {}
+    for cat, raw_weight in (payload or {}).items():
+        try:
+            w = float(raw_weight)
+        except (TypeError, ValueError):
+            continue
+        if w <= 0.01:
+            continue
+        cleaned[cat] = round(min(1.0, w), 4)
+
+    cur = db.cursor()
+    cur.execute(
+        """
+        UPDATE user_personas
+        SET explicit_category_weights = PARSE_JSON(%s),
+            updated_at = CURRENT_TIMESTAMP
+        WHERE user_id = %s
+        """,
+        (json.dumps(cleaned), user_id),
+    )
+    db.commit()
+    logger.info("Persona categories updated", user_id=user_id, categories=list(cleaned.keys()))
+    return {"user_id": user_id, "explicit_category_weights": cleaned}
+
+
 # ---------------------------------------------------------------------------
 # Companies
 # ---------------------------------------------------------------------------

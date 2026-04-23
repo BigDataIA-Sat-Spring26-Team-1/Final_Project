@@ -25,15 +25,24 @@ import {
   TrendTag,
 } from '@/components/DashboardComponents';
 import { PageWrapper } from '@/components/PageWrapper';
+import { Spinner } from '@/components/Spinner';
 import {
   ApiError,
   getHealth,
   getRecommendations,
+  getTopTrends,
+  listGlobalBriefs,
+  listGlobalNewsletters,
   type HealthResponse,
   type RankedArticle,
+  type TrendCluster,
 } from '@/lib/api';
 
 const STORAGE_KEY = 'curateai:user_id';
+
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
 
 export default function Home() {
   const [userId, setUserId] = useState('');
@@ -41,6 +50,13 @@ export default function Home() {
   const [healthError, setHealthError] = useState<string | null>(null);
   const [articles, setArticles] = useState<RankedArticle[]>([]);
   const [loadingArticles, setLoadingArticles] = useState(false);
+
+  // Aggregate stats pulled from the read-only snapshots we already have
+  // (trends + cross-tenant archives). No dedicated /admin/stats endpoint yet
+  // — these are best-effort proxies, enough for an at-a-glance system view.
+  const [topTrends, setTopTrends] = useState<TrendCluster[] | null>(null);
+  const [newsletterCount, setNewsletterCount] = useState<number | null>(null);
+  const [briefCount, setBriefCount] = useState<number | null>(null);
 
   // Pull health on mount — gives us an immediate signal of whether the backend
   // is even reachable, and surfaces the Snowflake version we're talking to.
@@ -58,8 +74,29 @@ export default function Home() {
       });
     const saved = sessionStorage.getItem(STORAGE_KEY);
     if (saved) setUserId(saved);
+
+    // Kick off the stat-card data in parallel — each call is independent so
+    // one slow/failing query doesn't block the others.
+    const today = todayIso();
+    getTopTrends(20, undefined, controller.signal, today)
+      .then((r) => setTopTrends(r.results))
+      .catch(() => setTopTrends([]));
+    listGlobalNewsletters(today, 100, controller.signal)
+      .then((r) => setNewsletterCount(r.total ?? r.results.length))
+      .catch(() => setNewsletterCount(0));
+    listGlobalBriefs(today, 100, controller.signal)
+      .then((r) => setBriefCount(r.total ?? r.results.length))
+      .catch(() => setBriefCount(0));
+
     return () => controller.abort();
   }, []);
+
+  const ingestionTotal = topTrends?.reduce((acc, t) => acc + (t.cluster_size ?? 0), 0) ?? 0;
+  const avgRelevancy =
+    topTrends && topTrends.length
+      ? Math.round(topTrends.reduce((a, t) => a + t.final_trend_score, 0) / topTrends.length)
+      : 0;
+  const agentCycles = (newsletterCount ?? 0) + (briefCount ?? 0);
 
   // Ingestion stream = top personalized articles. Only meaningful when a
   // user id is available; otherwise we leave the section empty rather than
@@ -125,33 +162,32 @@ export default function Home() {
         ) : null}
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          {/* TODO: wire these once /api/v1/admin/stats endpoint exists. */}
           <StatCard
             title="Daily Ingestion"
-            value="—"
-            change="0"
+            value={topTrends === null ? <Spinner size="sm" /> : String(ingestionTotal)}
+            change={ingestionTotal > 0 ? `+${ingestionTotal}` : '0'}
             description="Articles processed today"
             icon={Zap}
           />
           <StatCard
             title="Avg. Relevancy"
-            value="—"
-            change="0"
+            value={topTrends === null ? <Spinner size="sm" /> : String(avgRelevancy)}
+            change={avgRelevancy > 0 ? `+${avgRelevancy}` : '0'}
             description="Personalization score"
             icon={CheckCircle2}
           />
           <StatCard
             title="Agent Cycles"
-            value="—"
-            change="0"
+            value={newsletterCount === null || briefCount === null ? <Spinner size="sm" /> : String(agentCycles)}
+            change={agentCycles > 0 ? `+${agentCycles}` : '0'}
             description="LangGraph executions"
             icon={Brain}
           />
           <StatCard
             title="Drafts Ready"
-            value="—"
-            change="0"
-            description="Pending human review"
+            value={newsletterCount === null ? <Spinner size="sm" /> : String(newsletterCount ?? 0)}
+            change={(newsletterCount ?? 0) > 0 ? `+${newsletterCount}` : '0'}
+            description="Newsletters ready for review"
             icon={Newspaper}
             isWarning
           />

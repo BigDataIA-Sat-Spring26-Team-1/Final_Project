@@ -205,9 +205,21 @@ export const handlers = [
       results: [],
     }),
   ),
+  http.get(`${API}/api/v1/admin/newsletters/archive`, () =>
+    HttpResponse.json({
+      total: 0,
+      results: [],
+    }),
+  ),
   http.get(`${API}/api/v1/admin/briefs/all`, () =>
     HttpResponse.json({
       date: '2026-04-20',
+      total: 0,
+      results: [],
+    }),
+  ),
+  http.get(`${API}/api/v1/admin/briefs/archive`, () =>
+    HttpResponse.json({
       total: 0,
       results: [],
     }),

@@ -34,7 +34,11 @@ type FeedMode = 'PERSONALIZED' | 'COMMON';
 
 // Same session-scoped key as /user/persona so the two pages share context.
 const STORAGE_KEY = 'curateai:user_id';
-const FEED_LIMIT = 10;
+// Personalized feed keeps the 10-article ceiling (matches the newsletter
+// pipeline); the global deck surfaces the top 20 trending clusters since
+// that's what the common-highlights MCP tool also returns.
+const PERSONAL_LIMIT = 10;
+const COMMON_LIMIT = 20;
 
 export default function UserDashboard() {
   const [activeTab, setActiveTab] = useState<FeedMode>('PERSONALIZED');
@@ -62,7 +66,7 @@ export default function UserDashboard() {
           if (err instanceof ApiError && err.status === 404) return null;
           throw err;
         }),
-        getRecommendations(id, FEED_LIMIT, signal),
+        getRecommendations(id, PERSONAL_LIMIT, signal),
       ]);
       setPersona(personaData);
       setArticles(recsData.results ?? []);
@@ -91,13 +95,15 @@ export default function UserDashboard() {
   // any single user. Fetched once on mount so tab switching is instant.
   useEffect(() => {
     const controller = new AbortController();
-    getTopTrends(FEED_LIMIT, undefined, controller.signal)
+    getTopTrends(COMMON_LIMIT, undefined, controller.signal)
       .then((r) => {
         setGlobalArticles(
           r.results.map((t) => ({
             cluster_id: t.cluster_id,
             title: t.title,
             summary: t.summary ?? undefined,
+            url: t.url ?? undefined,
+            source_name: t.source_name ?? undefined,
             score: t.final_trend_score / 100,
             cluster_size: t.cluster_size,
             categories: t.categories,

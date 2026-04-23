@@ -28,7 +28,8 @@ type IconType = React.ComponentType<{ className?: string }>;
 // --- Global Stat Card ---
 type StatCardProps = {
   title: string;
-  value: string | number;
+  /** Accepts a ReactNode so callers can pass a <Spinner/> while loading. */
+  value: React.ReactNode;
   /** "+12%", "-2%", or "0" — the + / - / 0 prefix drives the colour. */
   change: string;
   description: string;
@@ -124,9 +125,10 @@ export function TrendTag({ name, count, velocity }: TrendTagProps) {
 }
 
 // --- Trending Feature Card ---
+// Accepts a ReactNode value so callers can render a <Spinner/> while loading.
 type TrendFeatureCardProps = {
   title: string;
-  value: string | number;
+  value: React.ReactNode;
   icon: IconType;
   detail: string;
   isPrimary?: boolean;
@@ -290,15 +292,23 @@ export function FeedableArticleRow({
     <div className="glass rounded-2xl p-5 border border-white/5 space-y-3 hover:bg-white/[0.02] transition-all">
       <div className="flex items-center justify-between gap-4">
         <div className="space-y-1 flex-1 min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="text-[10px] font-bold tracking-widest uppercase text-primary/80">
               {article.trend_status ?? 'RECOMMENDED'}
             </span>
+            {(article.source_name || article.sources?.[0]) && (
+              <>
+                <span className="w-1 h-1 rounded-full bg-white/20" />
+                <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                  {article.source_name ?? article.sources?.[0]}
+                </span>
+              </>
+            )}
             {article.cluster_size && article.cluster_size > 1 && (
               <>
                 <span className="w-1 h-1 rounded-full bg-white/20" />
                 <span className="text-xs text-muted-foreground">
-                  {article.cluster_size} sources
+                  +{article.cluster_size - 1} source{article.cluster_size > 2 ? 's' : ''}
                 </span>
               </>
             )}

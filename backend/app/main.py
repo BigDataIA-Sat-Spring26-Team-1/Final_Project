@@ -108,6 +108,7 @@ async def request_context_middleware(request: Request, call_next):
     HTTP_REQUEST_DURATION.labels(
         method=request.method,
         endpoint=request.url.path,
+        status=str(response.status_code),
     ).observe(duration)
 
     response.headers["X-Process-Time"] = f"{duration:.4f}"
