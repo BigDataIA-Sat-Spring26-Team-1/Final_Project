@@ -430,11 +430,17 @@ async def newsletter_archive(
     limit: int = Query(10, ge=1, le=100),
     db: SnowflakeConnection = Depends(get_db_connection),
 ) -> Dict[str, Any]:
-    """Recent newsletters for a given user, newest first."""
+    """Recent newsletters for a given user, newest first.
+
+    The response surfaces delivery state (``sent_at``, ``delivery_status``,
+    ``delivery_recipient``) so the admin UI can show whether today's edition
+    already shipped by email and disable the send button accordingly.
+    """
     params: List[Any] = [user_id]
     query = """
         SELECT id, user_id, edition_date, status, generated_at,
-               execution_path_taken, final_content, draft_content
+               execution_path_taken, final_content, draft_content,
+               sent_at, delivery_status, delivery_recipient, delivery_message_id
         FROM newsletters
         WHERE user_id = %s
     """
@@ -457,6 +463,10 @@ async def newsletter_archive(
             "execution_path_taken": r[5],
             "final_content": r[6],
             "draft_content": r[7],
+            "sent_at": _iso(r[8]),
+            "delivery_status": r[9],
+            "delivery_recipient": r[10],
+            "delivery_message_id": r[11],
         }
         for r in rows
     ]
@@ -521,3 +531,89 @@ async def admin_trigger_ingestion() -> DAGTriggerResponse:
         dag_run_id=run.get("dag_run_id", ""),
         state=run.get("state"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Newsletter delivery (MailerSend) — batch entry point
+# ---------------------------------------------------------------------------
+
+@router.post("/newsletters/send-all")
+async def admin_send_newsletters_batch(
+    date: Optional[str] = Query(
+        None, description="YYYY-MM-DD edition to ship; defaults to today."
+    ),
+    user_id: Optional[str] = Query(
+        None,
+        description=(
+            "Optional — dispatch only for this user id. When omitted we fan "
+            "out across every user whose newsletter row for ``date`` has "
+            "``sent_at IS NULL`` (i.e. never shipped by email before)."
+        ),
+    ),
+    db: SnowflakeConnection = Depends(get_db_connection),
+) -> Dict[str, Any]:
+    """Fan out MailerSend dispatches for an edition.
+
+    Concurrency is bounded (MailerSend's public API quota is modest) — we
+    process up to 5 users in flight. Each send is idempotent per
+    ``(user_id, edition_date)`` so retrying the batch is safe.
+    """
+    from asyncio import Semaphore, gather
+    from app.services.mailer import send_newsletter_email
+
+    from datetime import date as _date
+
+    target = date or _date.today().isoformat()
+
+    if user_id:
+        target_users = [user_id]
+    else:
+        cur = db.cursor()
+        cur.execute(
+            """
+            SELECT DISTINCT n.user_id
+            FROM newsletters n
+            WHERE n.edition_date = %s AND n.sent_at IS NULL
+              AND (n.final_content IS NOT NULL OR n.draft_content IS NOT NULL)
+            """,
+            (target,),
+        )
+        target_users = [row[0] for row in cur.fetchall() if row[0]]
+
+    if not target_users:
+        return {"edition_date": target, "attempted": 0, "results": []}
+
+    semaphore = Semaphore(5)
+
+    async def _one(uid: str) -> Dict[str, Any]:
+        async with semaphore:
+            try:
+                return await send_newsletter_email(uid, target, db)
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "Batch send failed for user",
+                    user_id=uid,
+                    error=str(exc),
+                    exc_info=True,
+                )
+                return {
+                    "status": "FAILED",
+                    "user_id": uid,
+                    "edition_date": target,
+                    "already_sent": False,
+                    "detail": str(exc),
+                }
+
+    results = await gather(*(_one(u) for u in target_users))
+    sent = sum(1 for r in results if r.get("status") == "SENT")
+    skipped = sum(1 for r in results if r.get("status") == "ALREADY_SENT")
+    failed = sum(1 for r in results if r.get("status") == "FAILED")
+
+    return {
+        "edition_date": target,
+        "attempted": len(target_users),
+        "sent": sent,
+        "skipped": skipped,
+        "failed": failed,
+        "results": results,
+    }

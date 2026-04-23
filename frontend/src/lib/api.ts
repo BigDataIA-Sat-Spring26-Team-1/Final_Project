@@ -363,6 +363,66 @@ export interface NewsletterArchiveItem {
   execution_path_taken: string | null;
   final_content: string | null;
   draft_content: string | null;
+  /** Populated by the MailerSend integration on successful delivery. */
+  sent_at?: string | null;
+  delivery_status?: string | null;
+  delivery_recipient?: string | null;
+  delivery_message_id?: string | null;
+}
+
+export interface NewsletterSendResponse {
+  status:
+    | 'SENT'
+    | 'ALREADY_SENT'
+    | 'FAILED'
+    | 'MAILER_DISABLED'
+    | 'NO_RECIPIENT'
+    | 'USER_NOT_FOUND';
+  user_id: string;
+  edition_date: string;
+  already_sent: boolean;
+  recipient?: string | null;
+  message_id?: string | null;
+  sent_at?: string | null;
+  detail?: string | null;
+  common_count?: number | null;
+  personal_count?: number | null;
+}
+
+export function sendNewsletterEmail(
+  userId: string,
+  editionDate?: string,
+  signal?: AbortSignal,
+): Promise<NewsletterSendResponse> {
+  return request<NewsletterSendResponse>('/api/v1/newsletter/send', {
+    method: 'POST',
+    json: {
+      user_id: userId,
+      edition_date: editionDate,
+    },
+    signal,
+  });
+}
+
+export interface NewsletterBatchSendResponse {
+  edition_date: string;
+  attempted: number;
+  sent?: number;
+  skipped?: number;
+  failed?: number;
+  results: NewsletterSendResponse[];
+}
+
+export function sendNewslettersBatch(
+  date?: string,
+  userId?: string,
+  signal?: AbortSignal,
+): Promise<NewsletterBatchSendResponse> {
+  return request<NewsletterBatchSendResponse>('/api/v1/admin/newsletters/send-all', {
+    method: 'POST',
+    query: { date, user_id: userId },
+    signal,
+  });
 }
 
 export interface NewsletterArchiveResponse {

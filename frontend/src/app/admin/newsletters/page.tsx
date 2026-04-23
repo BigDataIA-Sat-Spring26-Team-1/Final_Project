@@ -5,7 +5,17 @@
 // past newsletters. Tab 2 (B2B) does the same for companies with content
 // briefs. Both tabs share a simple layout: selector → archive list → viewer.
 
-import { Calendar, FileText, Mail, Newspaper, TriangleAlert, Users } from 'lucide-react';
+import {
+  Calendar,
+  CheckCircle2,
+  FileText,
+  Loader2,
+  Mail,
+  Newspaper,
+  Send,
+  TriangleAlert,
+  Users,
+} from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 
 import { CompanySwitcher } from '@/components/CompanySwitcher';
@@ -16,8 +26,11 @@ import {
   ApiError,
   getBriefArchive,
   getNewsletterArchive,
+  sendNewsletterEmail,
+  sendNewslettersBatch,
   type BriefArchiveItem,
   type NewsletterArchiveItem,
+  type NewsletterSendResponse,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
@@ -90,6 +103,11 @@ function B2CArchive() {
   const [selected, setSelected] = useState<NewsletterArchiveItem | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // `sending[editionDate]` tracks the in-flight send per row so two quick
+  // clicks don't double-fire. Cleared once the response lands.
+  const [sending, setSending] = useState<Record<string, boolean>>({});
+  const [sendNotice, setSendNotice] = useState<string | null>(null);
+  const [batchSending, setBatchSending] = useState(false);
 
   const load = useCallback(async (id: string, signal?: AbortSignal) => {
     setLoading(true);
@@ -119,13 +137,74 @@ function B2CArchive() {
     return () => controller.abort();
   }, [userId, load]);
 
+  const formatResult = (res: NewsletterSendResponse): string => {
+    if (res.status === 'SENT') return `Sent to ${res.recipient ?? 'recipient'}.`;
+    if (res.status === 'ALREADY_SENT') return `Already delivered on ${res.sent_at ?? 'an earlier attempt'}.`;
+    if (res.status === 'MAILER_DISABLED') return 'Mailer is disabled — set MAILERSEND_API_KEY to enable.';
+    if (res.status === 'NO_RECIPIENT') return 'User has no email address on file.';
+    if (res.status === 'USER_NOT_FOUND') return 'User id not found.';
+    return res.detail ? `Send failed: ${res.detail}` : 'Send failed.';
+  };
+
+  const handleSend = async (item: NewsletterArchiveItem) => {
+    setSending((s) => ({ ...s, [item.edition_date]: true }));
+    setSendNotice(null);
+    try {
+      const res = await sendNewsletterEmail(item.user_id, item.edition_date);
+      setSendNotice(formatResult(res));
+      await load(item.user_id);
+    } catch (err) {
+      setSendNotice(err instanceof Error ? `Send failed: ${err.message}` : 'Send failed.');
+    } finally {
+      setSending((s) => {
+        const copy = { ...s };
+        delete copy[item.edition_date];
+        return copy;
+      });
+    }
+  };
+
+  const handleBatchToday = async () => {
+    setBatchSending(true);
+    setSendNotice(null);
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const res = await sendNewslettersBatch(today);
+      setSendNotice(
+        `Batch for ${today}: attempted ${res.attempted}, sent ${res.sent ?? 0}, skipped ${res.skipped ?? 0}, failed ${res.failed ?? 0}.`,
+      );
+      if (userId) await load(userId);
+    } catch (err) {
+      setSendNotice(err instanceof Error ? `Batch failed: ${err.message}` : 'Batch failed.');
+    } finally {
+      setBatchSending(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="glass rounded-3xl p-6 border border-white/5 flex items-center gap-4 flex-wrap">
         <Mail className="w-5 h-5 text-secondary" />
         <span className="text-sm font-bold">Select a user</span>
         <UserSwitcher currentUserId={userId || null} onSelect={(id) => setUserId(id)} />
+        <div className="flex-1" />
+        <button
+          type="button"
+          onClick={handleBatchToday}
+          disabled={batchSending}
+          title="Dispatch today's newsletter via email to every user whose row has not yet shipped."
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-primary/10 border border-primary/30 text-primary text-xs font-bold uppercase tracking-widest hover:bg-primary/20 disabled:opacity-40 disabled:cursor-not-allowed transition"
+        >
+          {batchSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+          Send Today to All Pending
+        </button>
       </div>
+
+      {sendNotice && (
+        <div className="rounded-2xl border border-blue-500/20 bg-blue-500/5 p-4 text-sm text-blue-200">
+          {sendNotice}
+        </div>
+      )}
 
       {error && (
         <div className="rounded-2xl border border-rose-500/20 bg-rose-500/5 p-6 flex items-start gap-3">
@@ -150,24 +229,62 @@ function B2CArchive() {
               <p className="text-sm text-dim italic">No newsletters stored for this user yet.</p>
             ) : (
               <ul className="space-y-2">
-                {items.map((n) => (
-                  <li key={n.id}>
-                    <button
-                      onClick={() => setSelected(n)}
-                      className={cn(
-                        'w-full text-left px-3 py-2 rounded-xl text-sm transition',
-                        selected?.id === n.id
-                          ? 'bg-primary/10 border border-primary/20 text-white'
-                          : 'hover:bg-white/5 text-dim',
-                      )}
-                    >
-                      <p className="font-mono text-xs">{n.edition_date}</p>
-                      <p className="text-[10px] uppercase tracking-widest text-dim mt-0.5">
-                        {n.status}
-                      </p>
-                    </button>
-                  </li>
-                ))}
+                {items.map((n) => {
+                  const isSending = Boolean(sending[n.edition_date]);
+                  const alreadySent = Boolean(n.sent_at);
+                  return (
+                    <li key={n.id} className="space-y-1.5">
+                      <button
+                        onClick={() => setSelected(n)}
+                        className={cn(
+                          'w-full text-left px-3 py-2 rounded-xl text-sm transition',
+                          selected?.id === n.id
+                            ? 'bg-primary/10 border border-primary/20 text-white'
+                            : 'hover:bg-white/5 text-dim',
+                        )}
+                      >
+                        <p className="font-mono text-xs">{n.edition_date}</p>
+                        <p className="text-[10px] uppercase tracking-widest text-dim mt-0.5">
+                          {n.status}
+                        </p>
+                        {alreadySent ? (
+                          <p className="text-[10px] text-emerald-400 mt-1 flex items-center gap-1">
+                            <CheckCircle2 className="w-3 h-3" />
+                            sent {new Date(n.sent_at!).toLocaleString()}
+                          </p>
+                        ) : n.delivery_status === 'FAILED' ? (
+                          <p className="text-[10px] text-rose-400 mt-1">
+                            last attempt failed
+                          </p>
+                        ) : null}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleSend(n);
+                        }}
+                        disabled={isSending || alreadySent}
+                        title={alreadySent ? 'This edition was already delivered.' : 'Send this edition via email.'}
+                        className="w-full inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg text-[10px] uppercase tracking-widest font-bold border border-white/10 hover:border-primary/40 hover:text-primary disabled:opacity-40 disabled:cursor-not-allowed transition"
+                      >
+                        {isSending ? (
+                          <>
+                            <Loader2 className="w-3 h-3 animate-spin" /> Sending…
+                          </>
+                        ) : alreadySent ? (
+                          <>
+                            <CheckCircle2 className="w-3 h-3" /> Delivered
+                          </>
+                        ) : (
+                          <>
+                            <Send className="w-3 h-3" /> Send Email
+                          </>
+                        )}
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </aside>
