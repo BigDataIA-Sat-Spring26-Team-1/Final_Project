@@ -146,6 +146,32 @@ AIRFLOW_FERNET_KEY=               # python -c 'from cryptography.fernet import F
 AIRFLOW_ADMIN_USERNAME=admin
 AIRFLOW_ADMIN_PASSWORD=<rotate before demo>
 AIRFLOW_ADMIN_EMAIL=you@example.com
+
+# MailerSend (newsletter delivery)
+# API key is a Secret Manager secret in prod. Leave blank locally to
+# short-circuit sends — the /newsletter/send endpoint will return
+# status=MAILER_DISABLED without contacting the provider.
+MAILERSEND_API_KEY=
+MAILERSEND_FROM_EMAIL=info@test-q3enl6kez3742vwr.mlsender.net
+MAILERSEND_FROM_NAME=CurateAI Newsletter
+# Dev/staging safety rail: when set, every outgoing newsletter is
+# redirected to this address regardless of the user's stored email.
+# Required on MailerSend trial plans (they only deliver to the account
+# owner). Leave EMPTY in production so real users get their own mail.
+MAILERSEND_TEST_RECIPIENT=
+
+# CORS — only read by the backend. Comma-separated list of browser origins
+# allowed to hit the API. Must include every frontend URL (Cloud Run, local
+# dev, preview builds). Defaults to localhost-only when unset.
+CORS_ORIGINS=http://localhost:3000
+
+# JWT / session token signing (falls back to SECRET_KEY if unset)
+JWT_SECRET=                       # optional — uses SECRET_KEY by default
+JWT_EXPIRES_IN=14400              # seconds; matches the frontend idle expiry
+
+# LLM routing knobs (optional — sensible defaults ship in config.py)
+EMBEDDING_MODEL=text-embedding-3-small
+LLM_DEFAULT_MODEL=gpt-4o-mini
 ```
 
 ## Running the full stack on a VM
@@ -204,12 +230,14 @@ Secrets are stored in GCP Secret Manager (`SECRET_KEY`, `SNOWFLAKE_PASSWORD`, `O
 
 | DAG | Schedule | Does |
 |---|---|---|
-| `ingestion_dag` | @daily | Parallel fan-out (RSS ∥ ArXiv ∥ HN) → MERGE into `articles_raw` → invalidate cache |
-| `deduplication_dag` | @hourly (paused in demo) | URL + semantic dedup → `article_clusters` + Qdrant upsert |
-| `trend_dag` | @daily | Bulk re-rank clusters with 4-tier status (BREAKING / TRENDING / VIRAL / COMMUNITY-PICK / REGULAR) |
-| `b2c_personalization_dag` | @daily | Fan-out — top-10 personalised clusters per user → `daily_selections` |
-| `b2c_newsletter_dag` | @daily | Fan-out — one newsletter per user, persisted to `newsletters` |
-| `b2b_seo_dag` | @daily | Fan-out — one brief per company, persisted to `content_briefs` |
+| `ingestion_dag` | 10:30 UTC daily | Parallel fan-out (RSS ∥ ArXiv ∥ HN) → MERGE into `articles_raw` → invalidate cache |
+| `deduplication_dag` | @hourly | URL + semantic dedup → `article_clusters` + Qdrant upsert |
+| `trend_dag` | 10:50 UTC daily | Bulk re-rank clusters with 4-tier status (BREAKING / TRENDING / VIRAL / COMMUNITY-PICK / REGULAR) |
+| `qdrant_sync_dag` | 11:05 UTC daily | Re-embed every live cluster and bulk-upsert into Qdrant `articles`, so the vector store stays in sync with Snowflake after merges / backfills |
+| `b2c_personalization_dag` | 11:20 UTC daily | Fan-out — top-10 personalised clusters per user → `daily_selections` |
+| `b2c_newsletter_dag` | 11:50 UTC daily | Fan-out — one newsletter per user, persisted to `newsletters`. No auto-email; send is a manual user/admin action. |
+| `b2b_seo_dag` | manual (+ `{"company_id": "…"}` conf) | Fan-out — one structured brief per company, persisted to `content_briefs.structured_brief` |
+| `behavioral_refinement_dag` | @weekly | Decay + boost `user_personas.behavioral_category_weights` |
 | `behavioral_refinement_dag` | @weekly (paused in demo) | P4 rollup — decay + merge 7d of feedback events into `behavioral_category_weights` |
 
 All per-user / per-company DAGs accept `dag_run.conf={"user_id": "…"}` / `{"company_id": "…"}` for on-demand targeted runs.
@@ -318,7 +346,7 @@ Two reasons: (a) Snowflake's VARIANT columns let us store evolving category-weig
 
 ### Why "paused by default" for some DAGs
 
-`deduplication_dag` is scheduled @hourly; `behavioral_refinement_dag` is @weekly but runs a scan over feedback events regardless of whether any exist. Both stay paused during the demo window to avoid surprise runs eating Snowflake compute credits while the TA tests the app. They're one-click to unpause in the Airflow UI.
+The daily pipeline fires as a **staggered chain starting 10:30 UTC** (6:30 AM EDT): ingestion → trend → qdrant_sync → b2c_personalization → b2c_newsletter, with a ~15–30 minute gap between steps so each upstream DAG has time to settle before the next consumes its output. `deduplication_dag` runs **@hourly** continuously to keep clustering reactive to fresh articles. `behavioral_refinement_dag` is **@weekly**. `b2b_seo_dag` is manual-only (trigger from the UI or via `dag_run.conf = {"company_id": "..."}`) since brief generation is user-driven, not time-driven.
 
 ### Why a thin backend for pipelines, not inline execution
 
