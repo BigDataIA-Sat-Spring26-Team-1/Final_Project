@@ -1,17 +1,15 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import {
   LayoutDashboard,
   Newspaper,
   Settings,
-  User,
   TrendingUp,
   Users,
   Building2,
   ShieldCheck,
-  LogOut,
   ChevronDown,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -19,6 +17,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useState, useEffect } from 'react';
 import { CompanySwitcher } from '@/components/CompanySwitcher';
 import { UserSwitcher } from '@/components/UserSwitcher';
+import { ApiError, getPersona } from '@/lib/api';
 
 type Role = 'ADMIN' | 'USER' | 'COMPANY';
 
@@ -46,6 +45,7 @@ const COMPANY_KEY = 'selectedCompanyId';
 
 export function Navigation() {
   const pathname = usePathname();
+  const router = useRouter();
   const [role, setRole] = useState<Role>('ADMIN');
   const [isRoleMenuOpen, setIsRoleMenuOpen] = useState(false);
   const [hasMounted, setHasMounted] = useState(false);
@@ -55,6 +55,9 @@ export function Navigation() {
   // existing per-page switchers without any extra plumbing.
   const [globalUserId, setGlobalUserId] = useState<string | null>(null);
   const [globalCompanyId, setGlobalCompanyId] = useState<string | null>(null);
+  // Whether the active user already has a persona — drives the onboarding
+  // nav gate. null until we've finished checking.
+  const [activeUserHasPersona, setActiveUserHasPersona] = useState<boolean | null>(null);
 
   // Initialize role + active tenants from browser storage on mount.
   useEffect(() => {
@@ -71,11 +74,37 @@ export function Navigation() {
     })();
   }, []);
 
-  // Persist role changes
+  // Probe persona existence for the active user so we can disable the
+  // Onboarding link when the account is already set up. 404 → no persona.
+  useEffect(() => {
+    if (!globalUserId) {
+      setActiveUserHasPersona(null);
+      return;
+    }
+    const controller = new AbortController();
+    (async () => {
+      try {
+        await getPersona(globalUserId, controller.signal);
+        if (!controller.signal.aborted) setActiveUserHasPersona(true);
+      } catch (err) {
+        if ((err as Error).name === 'AbortError') return;
+        if (err instanceof ApiError && err.status === 404) {
+          setActiveUserHasPersona(false);
+        }
+      }
+    })();
+    return () => controller.abort();
+  }, [globalUserId]);
+
+  // Persist role changes + jump to the first page of the new view so the
+  // user isn't stranded on a route that doesn't exist in the new nav set
+  // (e.g. /company/trends when flipping back to ADMIN).
   const handleRoleChange = (newRole: Role) => {
     setRole(newRole);
     localStorage.setItem('curateai_role', newRole);
     setIsRoleMenuOpen(false);
+    const firstHref = NAV_CONFIG[newRole][0]?.href;
+    if (firstHref) router.push(firstHref);
   };
 
   const activeNav = NAV_CONFIG[role];
@@ -180,46 +209,60 @@ export function Navigation() {
         {activeNav.map((item) => {
           const isActive = pathname === item.href;
           const Icon = item.icon;
+          // Onboarding is only meaningful for users without a persona.
+          // When the active user already has one we disable the link.
+          const isOnboardingDisabled =
+            item.href === '/user/onboarding' && activeUserHasPersona === true;
+
+          const content = (
+            <span className={cn(
+              "flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 group",
+              isOnboardingDisabled
+                ? "text-muted-foreground/40 cursor-not-allowed"
+                : isActive
+                ? "text-primary-foreground"
+                : "text-muted-foreground hover:text-white hover:bg-white/5"
+            )}>
+              {isActive && !isOnboardingDisabled && (
+                <motion.div
+                  layoutId="nav-bg"
+                  className="absolute inset-0 bg-secondary rounded-xl z-[-1]"
+                  transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                />
+              )}
+              <Icon className={cn(
+                "w-5 h-5",
+                isOnboardingDisabled
+                  ? "text-muted-foreground/40"
+                  : isActive
+                  ? "text-primary-foreground"
+                  : "text-muted-foreground group-hover:text-white"
+              )} />
+              {item.name}
+            </span>
+          );
+
+          if (isOnboardingDisabled) {
+            return (
+              <div
+                key={item.href}
+                className="block relative"
+                title="This user already has a persona — edit it from My Persona instead."
+                aria-disabled="true"
+              >
+                {content}
+              </div>
+            );
+          }
 
           return (
             <Link key={item.href} href={item.href} className="block relative">
-              <span className={cn(
-                "flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 group",
-                isActive 
-                  ? "text-primary-foreground" 
-                  : "text-muted-foreground hover:text-white hover:bg-white/5"
-              )}>
-                {isActive && (
-                  <motion.div 
-                    layoutId="nav-bg"
-                    className="absolute inset-0 bg-secondary rounded-xl z-[-1]"
-                    transition={{ type: "spring", stiffness: 300, damping: 30 }}
-                  />
-                )}
-                <Icon className={cn(
-                  "w-5 h-5",
-                  isActive ? "text-primary-foreground" : "text-muted-foreground group-hover:text-white"
-                )} />
-                {item.name}
-              </span>
+              {content}
             </Link>
           );
         })}
       </div>
 
-      <div className="pt-8 space-y-1 border-t border-white/5">
-        <p className="px-3 text-[10px] font-black text-muted-foreground uppercase tracking-widest mb-4">
-          Session
-        </p>
-        <Link href="/user/profile" className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-muted-foreground hover:text-white hover:bg-white/5 transition-all">
-          <User className="w-5 h-5" />
-          General Profile
-        </Link>
-        <button className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-destructive hover:bg-destructive/10 transition-all">
-          <LogOut className="w-5 h-5" />
-          Logout
-        </button>
-      </div>
     </nav>
   );
 }

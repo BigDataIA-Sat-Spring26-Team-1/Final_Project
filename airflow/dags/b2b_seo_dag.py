@@ -132,8 +132,11 @@ def generate_briefs(**context):
 with DAG(
     dag_id="b2b_seo_dag",
     default_args=default_args(),
-    description="Generate per-company B2B intelligence briefs",
-    schedule_interval="@daily",
+    description="Generate per-company B2B intelligence briefs (manual trigger only)",
+    # Briefs run on-demand from the frontend / backend; there is no daily
+    # cadence. Setting schedule_interval=None keeps the DAG available in the
+    # Airflow UI for manual triggers without scheduling it automatically.
+    schedule_interval=None,
     catchup=False,
     max_active_runs=1,
     tags=["b2b", "seo", "curateai"],

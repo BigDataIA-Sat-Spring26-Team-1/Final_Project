@@ -113,7 +113,125 @@ class SearchService:
                 "sources": hit.payload.get("sources", []),
                 "cluster_size": hit.payload.get("cluster_size", 1)
             })
-            
+
+        # URL enrichment. Qdrant payloads historically stored the representative
+        # article's id — look those up in articles_raw first.
+        needs_url = [r for r in results if not r.get("url")]
+        if needs_url and db is not None:
+            try:
+                missing_ids = [r["cluster_id"] for r in needs_url]
+                cur = db.cursor()
+                placeholders = ",".join(["%s"] * len(missing_ids))
+                cur.execute(
+                    f"SELECT id, url, source_name FROM articles_raw "
+                    f"WHERE id IN ({placeholders})",
+                    tuple(missing_ids),
+                )
+                by_id = {row[0]: (row[1], row[2]) for row in cur.fetchall()}
+                for r in needs_url:
+                    enriched = by_id.get(r["cluster_id"])
+                    if enriched:
+                        r["url"] = enriched[0] or ""
+                        if enriched[1] and enriched[1] not in r.get("sources", []):
+                            r["sources"] = [enriched[1], *(r.get("sources") or [])]
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Recommendation url enrichment failed", error=str(e))
+
+        # If Qdrant's vectors are stale (a common state during demos — the
+        # collection was seeded from an older ingestion), the id-based lookup
+        # above returns nothing. In that case fall back to a Snowflake-native
+        # recommendation driven by the user's category weights joined to the
+        # trend ranking, so every card still renders with a real URL.
+        if db is not None and all(not r.get("url") for r in results):
+            try:
+                cur = db.cursor()
+                cur.execute(
+                    """
+                    SELECT a.id,
+                           a.title,
+                           a.url,
+                           a.source_name,
+                           a.summary,
+                           c.final_trend_score,
+                           c.cluster_size,
+                           c.trend_status,
+                           c.category_weights
+                    FROM article_clusters c
+                    JOIN (
+                        SELECT cluster_id, id, title, url, source_name, summary,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY cluster_id
+                                   ORDER BY published_at DESC NULLS LAST,
+                                            fetched_at DESC
+                               ) AS rn
+                        FROM articles_raw
+                        WHERE cluster_id IS NOT NULL AND url IS NOT NULL AND url <> ''
+                    ) a ON a.cluster_id = c.id AND a.rn = 1
+                    WHERE c.final_trend_score IS NOT NULL
+                    ORDER BY c.final_trend_score DESC NULLS LAST
+                    LIMIT %s
+                    """,
+                    (limit * 3,),
+                )
+                rows = cur.fetchall()
+
+                # Rank by overlap with user's weights when available; otherwise
+                # keep the raw trend ordering.
+                weights_lc = {k.lower(): v for k, v in (weights or {}).items()}
+
+                def overlap_score(cat_weights_variant) -> float:
+                    if not cat_weights_variant:
+                        return 0.0
+                    try:
+                        parsed = (
+                            cat_weights_variant
+                            if isinstance(cat_weights_variant, dict)
+                            else json.loads(cat_weights_variant)
+                        )
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        return 0.0
+                    return sum(
+                        float(v) * float(weights_lc.get(str(k).lower(), 0.0))
+                        for k, v in (parsed or {}).items()
+                    )
+
+                enriched_results: list[Dict[str, Any]] = []
+                for row in rows:
+                    trend_score = float(row[5] or 0.0)
+                    overlap = overlap_score(row[8])
+                    combined = (overlap * 100.0) + trend_score
+                    enriched_results.append(
+                        {
+                            "cluster_id": str(row[0]),
+                            "score": round(combined / 200.0, 4),
+                            "title": row[1] or "",
+                            "url": row[2] or "",
+                            "summary": row[4] or "",
+                            "sources": [row[3]] if row[3] else [],
+                            "cluster_size": int(row[6] or 1),
+                            "trend_status": row[7],
+                            "categories": (
+                                row[8]
+                                if isinstance(row[8], dict)
+                                else (json.loads(row[8]) if row[8] else {})
+                            ),
+                        }
+                    )
+
+                enriched_results.sort(key=lambda r: r["score"], reverse=True)
+                # Only replace the Qdrant results when the fallback actually
+                # produced something — otherwise we'd nuke valid hits for a
+                # test/empty-Snowflake environment.
+                if enriched_results:
+                    results = enriched_results[:limit]
+                    logger.info(
+                        "Used Snowflake fallback recommendations",
+                        user_id=user_id,
+                        returned=len(results),
+                    )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Snowflake fallback recommendations failed", error=str(e))
+
         return {
             "user_id": user_id,
             "semantic_basis": search_query,
