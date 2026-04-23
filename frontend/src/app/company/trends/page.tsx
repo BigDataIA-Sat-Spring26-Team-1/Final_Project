@@ -8,6 +8,7 @@
 
 import {
   ArrowUpRight,
+  Calendar,
   Loader2,
   Search,
   TriangleAlert,
@@ -31,17 +32,27 @@ type Row = TrendCluster & {
   deltaPct: number;
 };
 
+const TODAY = new Date().toISOString().slice(0, 10);
+
 export default function CompanyTrendsPage() {
   const [filter, setFilter] = useState('');
+  const [selectedDate, setSelectedDate] = useState<string>('');
   const [trends, setTrends] = useState<TrendCluster[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
+    setLoading(true);
+    setError(null);
     (async () => {
       try {
-        const data = await getTopTrends(30, undefined, controller.signal);
+        const data = await getTopTrends(
+          30,
+          undefined,
+          controller.signal,
+          selectedDate || undefined,
+        );
         setTrends(data.results);
       } catch (err) {
         if ((err as Error).name === 'AbortError') return;
@@ -55,7 +66,7 @@ export default function CompanyTrendsPage() {
       }
     })();
     return () => controller.abort();
-  }, []);
+  }, [selectedDate]);
 
   // Map the raw cluster shape into the table's display row shape. Values are
   // heuristics — they're consistent across renders so the UI stays stable.
@@ -98,7 +109,26 @@ export default function CompanyTrendsPage() {
               Authority-weighted trend signals across ranked clusters.
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex items-center glass rounded-xl px-4 py-2 border border-white/5 focus-within:border-primary/40">
+              <Calendar className="w-4 h-4 text-dim mr-2" />
+              <input
+                type="date"
+                value={selectedDate}
+                max={TODAY}
+                onChange={(e) => setSelectedDate(e.target.value)}
+                className="bg-transparent border-none outline-none text-sm placeholder:text-dim"
+              />
+              {selectedDate && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedDate('')}
+                  className="ml-2 text-[10px] uppercase tracking-widest text-primary hover:underline"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
             <div className="flex items-center glass rounded-xl px-4 py-2 border border-white/5 focus-within:border-primary/40">
               <Search className="w-4 h-4 text-dim mr-2" />
               <input

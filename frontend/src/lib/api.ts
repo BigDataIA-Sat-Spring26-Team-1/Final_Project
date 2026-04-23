@@ -183,6 +183,12 @@ export interface B2CNewsletterResponse {
   status: string;
   html_content: string;
   execution_path_taken: string[];
+  /** True when the backend returned a cached draft rather than regenerating. */
+  already_generated?: boolean;
+  /** ISO timestamp of the persisted draft. */
+  generated_at?: string | null;
+  /** Edition date (YYYY-MM-DD) the draft belongs to. */
+  edition_date?: string | null;
 }
 
 export interface B2BReportRequest {
@@ -193,6 +199,9 @@ export interface B2BReportResponse {
   user_id: string;
   report: string;
   status: string;
+  already_generated?: boolean;
+  generated_at?: string | null;
+  brief_date?: string | null;
 }
 
 export interface IngestionBatchResponse {

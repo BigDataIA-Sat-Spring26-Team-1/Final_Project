@@ -4,6 +4,7 @@ from app.api.newsletter import generate_b2c_newsletter
 from app.core.schemas import B2CNewsletterRequest
 from app.core.cache import INTERNAL_CACHE
 
+@pytest.mark.skip(reason="Archetype-level caching removed in favor of per-user per-day idempotency at the Snowflake layer; see newsletter.py._load_existing_newsletter")
 @pytest.mark.asyncio
 async def test_shared_archetype_caching_convergence():
     """

@@ -21,6 +21,12 @@ log = logging.getLogger("airflow.task")
 
 
 def resolve_companies(**context):
+    """Pick companies that still need a brief for today.
+
+    Explicit ``company_id`` in conf always wins. Otherwise we skip any company
+    that already has a brief dated today — the API-triggered path (or an
+    earlier DAG run) has already generated it and we don't want duplicates.
+    """
     conf = context.get("dag_run").conf if context.get("dag_run") else {}
     explicit = (conf or {}).get("company_id")
     if explicit:
@@ -29,11 +35,21 @@ def resolve_companies(**context):
     ensure_backend_on_path()
     from app.db.snowflake import get_db_connection
 
+    today = date.today().isoformat()
     db_gen = get_db_connection()
     db = next(db_gen)
     try:
         cur = db.cursor()
-        cur.execute("SELECT id FROM companies")
+        cur.execute(
+            """
+            SELECT c.id FROM companies c
+            WHERE NOT EXISTS (
+                SELECT 1 FROM content_briefs b
+                WHERE b.company_id = c.id AND b.brief_date = %s
+            )
+            """,
+            (today,),
+        )
         return [row[0] for row in cur.fetchall() if row[0]]
     finally:
         try:
