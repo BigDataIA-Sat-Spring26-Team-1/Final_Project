@@ -29,7 +29,10 @@ function formatVolume(n?: number | null): string {
 }
 
 function urgencyClass(tier?: string): string {
-  switch (tier) {
+  // Tiers come from the B2B agent as "HIDDEN GEM" / "ACT NOW" (spaces) —
+  // normalise so the switch also matches any underscore-formatted legacy row.
+  const normal = (tier || '').toUpperCase().replace(/\s+/g, '_');
+  switch (normal) {
     case 'HIDDEN_GEM':
       return 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
     case 'ACT_NOW':

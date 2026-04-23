@@ -84,10 +84,14 @@ def _score_article(article: Dict[str, Any]) -> Dict[str, Any]:
     competition_gap = (1.0 - min(cluster_size / 10.0, 1.0)) * 30.0
     total = round(relevance + velocity + competition_gap, 2)
 
+    # Keep the legacy "HIDDEN GEM" / "ACT NOW" spacing — it's what existing
+    # content_briefs rows hold and what tests/unit/test_b2b_agent.py asserts
+    # against. Underscored variants are produced from these at the frontend
+    # (see StrategicBriefCard.urgencyClass).
     if total >= 85:
-        urgency = "HIDDEN_GEM"
+        urgency = "HIDDEN GEM"
     elif total >= 70:
-        urgency = "ACT_NOW"
+        urgency = "ACT NOW"
     elif total >= 50:
         urgency = "MONITOR"
     else:
@@ -432,3 +436,50 @@ def get_b2b_report_graph():
     workflow.add_edge("markdown", END)
 
     return workflow.compile()
+
+
+# ---------------------------------------------------------------------------
+# Legacy shim
+# ---------------------------------------------------------------------------
+# The original B2B agent exposed a standalone `generate_report` coroutine that
+# turned scored intel into a Markdown exec-summary via a plain-text LLM call.
+# The production graph no longer routes through it — `build_strategic_brief` +
+# `render_markdown` replaced it — but tests/unit/test_b2b_agent.py and
+# tests/unit/test_editor_reliability.py still import this symbol. Keeping it
+# as a thin coroutine with the original contract lets those tests pass
+# against the refactor without touching test files.
+
+async def generate_report(state: AgentState) -> Dict[str, Any]:
+    """Legacy Markdown exec-summary path. Not used by the compiled graph."""
+    articles = state.get("retrieved_articles", [])
+    if not articles:
+        return {
+            "generated_content": (
+                "# Enterprise Intelligence Report\n\n"
+                "No relevant intelligence signals found for this profile."
+            ),
+            "status": "EMPTY_RESULT",
+        }
+
+    intel_lines: List[str] = []
+    for a in articles:
+        tier = a.get("urgency_tier", "MONITOR")
+        score = a.get("opportunity_score", 0)
+        sources_count = a.get("cluster_size", 1)
+        intel_lines.append(
+            f"- [{tier}] **{a['title']}** | Score: {score} | Coverage: {sources_count} source(s)"
+        )
+
+    prompt = (
+        "You are the CurateAI B2B Intelligence Analyst. Generate a concise "
+        "executive research briefing in Markdown for a corporate client "
+        "based on the following scored intelligence signals:\n\n"
+        + "\n".join(intel_lines)
+        + "\n\nStructure: # Executive Intelligence Briefing, "
+        "## Key Opportunity Signals, ## Market Trends Overview, "
+        "## Recommended Actions. Keep it data-driven and concise."
+    )
+    response = await BaseAgentService.call_llm(
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return {"generated_content": response, "status": "SUCCESS"}
