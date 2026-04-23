@@ -62,6 +62,21 @@ class UpdateCompanyRequest(BaseModel):
     industry: Optional[str] = None
     description: Optional[str] = None
     company_size: Optional[str] = None
+    target_audience: Optional[str] = None
+    key_products: Optional[str] = None
+    content_pillars: Optional[str] = None
+    competitors: Optional[str] = None
+    tone_of_voice: Optional[str] = None
+
+
+ALLOWED_COMPANY_SIZES = {"EARLY_STAGE", "GROWTH", "MID_MARKET", "ENTERPRISE"}
+ALLOWED_TONES = {
+    "AUTHORITATIVE",
+    "CONVERSATIONAL",
+    "TECHNICAL",
+    "VISIONARY",
+    "PLAYFUL",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +201,43 @@ async def update_persona(
     return {"user_id": user_id, "status": "updated"}
 
 
+@router.put("/personas/{user_id}/categories")
+async def update_persona_categories(
+    user_id: str,
+    payload: Dict[str, float],
+    db: SnowflakeConnection = Depends(get_db_connection),
+) -> Dict[str, Any]:
+    """Overwrite the explicit category weights for a user.
+
+    This is the "pick your interests" surface — the persona page sends a
+    dictionary of {category: weight}. We normalise values to [0, 1] and drop
+    anything below a 0.01 noise floor so the stored taxonomy stays clean.
+    """
+    cleaned: Dict[str, float] = {}
+    for cat, raw_weight in (payload or {}).items():
+        try:
+            w = float(raw_weight)
+        except (TypeError, ValueError):
+            continue
+        if w <= 0.01:
+            continue
+        cleaned[cat] = round(min(1.0, w), 4)
+
+    cur = db.cursor()
+    cur.execute(
+        """
+        UPDATE user_personas
+        SET explicit_category_weights = PARSE_JSON(%s),
+            updated_at = CURRENT_TIMESTAMP
+        WHERE user_id = %s
+        """,
+        (json.dumps(cleaned), user_id),
+    )
+    db.commit()
+    logger.info("Persona categories updated", user_id=user_id, categories=list(cleaned.keys()))
+    return {"user_id": user_id, "explicit_category_weights": cleaned}
+
+
 # ---------------------------------------------------------------------------
 # Companies
 # ---------------------------------------------------------------------------
@@ -256,25 +308,82 @@ async def list_companies(
     return {"total": total, "results": results}
 
 
+@router.get("/companies/{company_id}")
+async def get_company(
+    company_id: str,
+    db: SnowflakeConnection = Depends(get_db_connection),
+) -> Dict[str, Any]:
+    """Fetch a single company by id for the company-profile edit page."""
+    cur = db.cursor()
+    cur.execute(
+        """
+        SELECT id, name, domain, industry, description, company_size,
+               target_audience, key_products, content_pillars, competitors,
+               tone_of_voice, created_at, updated_at
+        FROM companies
+        WHERE id = %s
+        """,
+        (company_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Company not found.")
+    return {
+        "id": row[0],
+        "name": row[1],
+        "domain": row[2],
+        "industry": row[3],
+        "description": row[4],
+        "company_size": row[5],
+        "target_audience": row[6],
+        "key_products": row[7],
+        "content_pillars": row[8],
+        "competitors": row[9],
+        "tone_of_voice": row[10],
+        "created_at": _iso(row[11]),
+        "updated_at": _iso(row[12]),
+    }
+
+
 @router.put("/companies/{company_id}")
 async def update_company(
     company_id: str,
     payload: UpdateCompanyRequest,
     db: SnowflakeConnection = Depends(get_db_connection),
 ) -> Dict[str, str]:
-    dirty = {
-        k: v
-        for k, v in {
-            "name": payload.name,
-            "domain": payload.domain,
-            "industry": payload.industry,
-            "description": payload.description,
-            "company_size": payload.company_size,
-        }.items()
-        if v is not None
+    # Every profile field is mandatory — the downstream DAGs and the
+    # Strategic Brief agent rely on full context, so we reject partial
+    # payloads with explicit 422s.
+    required = {
+        "name": payload.name,
+        "domain": payload.domain,
+        "industry": payload.industry,
+        "description": payload.description,
+        "company_size": payload.company_size,
+        "target_audience": payload.target_audience,
+        "key_products": payload.key_products,
+        "content_pillars": payload.content_pillars,
+        "competitors": payload.competitors,
+        "tone_of_voice": payload.tone_of_voice,
     }
-    if not dirty:
-        return {"company_id": company_id, "status": "noop"}
+    missing = [k for k, v in required.items() if v is None or str(v).strip() == ""]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Missing required fields: {', '.join(missing)}",
+        )
+    if payload.company_size not in ALLOWED_COMPANY_SIZES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"company_size must be one of {sorted(ALLOWED_COMPANY_SIZES)}",
+        )
+    if payload.tone_of_voice not in ALLOWED_TONES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"tone_of_voice must be one of {sorted(ALLOWED_TONES)}",
+        )
+
+    dirty = {k: v.strip() if isinstance(v, str) else v for k, v in required.items()}
 
     cur = db.cursor()
     set_clause = ", ".join(f"{col} = %s" for col in dirty)
@@ -393,11 +502,17 @@ async def newsletter_archive(
     limit: int = Query(10, ge=1, le=100),
     db: SnowflakeConnection = Depends(get_db_connection),
 ) -> Dict[str, Any]:
-    """Recent newsletters for a given user, newest first."""
+    """Recent newsletters for a given user, newest first.
+
+    The response surfaces delivery state (``sent_at``, ``delivery_status``,
+    ``delivery_recipient``) so the admin UI can show whether today's edition
+    already shipped by email and disable the send button accordingly.
+    """
     params: List[Any] = [user_id]
     query = """
         SELECT id, user_id, edition_date, status, generated_at,
-               execution_path_taken, final_content, draft_content
+               execution_path_taken, final_content, draft_content,
+               sent_at, delivery_status, delivery_recipient, delivery_message_id
         FROM newsletters
         WHERE user_id = %s
     """
@@ -420,6 +535,10 @@ async def newsletter_archive(
             "execution_path_taken": r[5],
             "final_content": r[6],
             "draft_content": r[7],
+            "sent_at": _iso(r[8]),
+            "delivery_status": r[9],
+            "delivery_recipient": r[10],
+            "delivery_message_id": r[11],
         }
         for r in rows
     ]
@@ -436,7 +555,7 @@ async def brief_archive(
     params: List[Any] = [company_id]
     query = """
         SELECT id, company_id, brief_date, brief_content, urgency_tier,
-               created_at, generated_at
+               created_at, generated_at, structured_brief
         FROM content_briefs
         WHERE company_id = %s
     """
@@ -449,6 +568,19 @@ async def brief_archive(
     cur = db.cursor()
     cur.execute(query, tuple(params))
     rows = cur.fetchall()
+
+    def _parse_variant(raw: Any) -> Optional[Dict[str, Any]]:
+        if raw is None:
+            return None
+        if isinstance(raw, dict):
+            return raw
+        if isinstance(raw, str) and raw.strip():
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                return None
+        return None
+
     results = [
         {
             "id": r[0],
@@ -458,6 +590,7 @@ async def brief_archive(
             "urgency_tier": r[4],
             "created_at": _iso(r[5]),
             "generated_at": _iso(r[6]),
+            "structured_brief": _parse_variant(r[7]),
         }
         for r in rows
     ]
@@ -484,3 +617,89 @@ async def admin_trigger_ingestion() -> DAGTriggerResponse:
         dag_run_id=run.get("dag_run_id", ""),
         state=run.get("state"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Newsletter delivery (MailerSend) — batch entry point
+# ---------------------------------------------------------------------------
+
+@router.post("/newsletters/send-all")
+async def admin_send_newsletters_batch(
+    date: Optional[str] = Query(
+        None, description="YYYY-MM-DD edition to ship; defaults to today."
+    ),
+    user_id: Optional[str] = Query(
+        None,
+        description=(
+            "Optional — dispatch only for this user id. When omitted we fan "
+            "out across every user whose newsletter row for ``date`` has "
+            "``sent_at IS NULL`` (i.e. never shipped by email before)."
+        ),
+    ),
+    db: SnowflakeConnection = Depends(get_db_connection),
+) -> Dict[str, Any]:
+    """Fan out MailerSend dispatches for an edition.
+
+    Concurrency is bounded (MailerSend's public API quota is modest) — we
+    process up to 5 users in flight. Each send is idempotent per
+    ``(user_id, edition_date)`` so retrying the batch is safe.
+    """
+    from asyncio import Semaphore, gather
+    from app.services.mailer import send_newsletter_email
+
+    from datetime import date as _date
+
+    target = date or _date.today().isoformat()
+
+    if user_id:
+        target_users = [user_id]
+    else:
+        cur = db.cursor()
+        cur.execute(
+            """
+            SELECT DISTINCT n.user_id
+            FROM newsletters n
+            WHERE n.edition_date = %s AND n.sent_at IS NULL
+              AND (n.final_content IS NOT NULL OR n.draft_content IS NOT NULL)
+            """,
+            (target,),
+        )
+        target_users = [row[0] for row in cur.fetchall() if row[0]]
+
+    if not target_users:
+        return {"edition_date": target, "attempted": 0, "results": []}
+
+    semaphore = Semaphore(5)
+
+    async def _one(uid: str) -> Dict[str, Any]:
+        async with semaphore:
+            try:
+                return await send_newsletter_email(uid, target, db)
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "Batch send failed for user",
+                    user_id=uid,
+                    error=str(exc),
+                    exc_info=True,
+                )
+                return {
+                    "status": "FAILED",
+                    "user_id": uid,
+                    "edition_date": target,
+                    "already_sent": False,
+                    "detail": str(exc),
+                }
+
+    results = await gather(*(_one(u) for u in target_users))
+    sent = sum(1 for r in results if r.get("status") == "SENT")
+    skipped = sum(1 for r in results if r.get("status") == "ALREADY_SENT")
+    failed = sum(1 for r in results if r.get("status") == "FAILED")
+
+    return {
+        "edition_date": target,
+        "attempted": len(target_users),
+        "sent": sent,
+        "skipped": skipped,
+        "failed": failed,
+        "results": results,
+    }

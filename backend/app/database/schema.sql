@@ -103,6 +103,13 @@ CREATE TABLE IF NOT EXISTS newsletters (
     feedback_signal VARCHAR(50), -- 'THUMBS_UP', 'THUMBS_DOWN' -> feeds back into `behavioral_category_weights`
     execution_path_taken VARCHAR(500), -- LangGraph node trace for observability / debugging
     generated_at TIMESTAMP_NTZ, -- When the draft was produced by the agent
+    -- Delivery tracking. `sent_at` populated by the MailerSend integration
+    -- makes (user_id, edition_date, sent_at IS NOT NULL) the idempotency key
+    -- for the "send a user's newsletter by email" flow.
+    sent_at TIMESTAMP_NTZ,
+    delivery_status VARCHAR(50), -- 'SENT' | 'FAILED' | NULL (not yet attempted)
+    delivery_message_id VARCHAR(255), -- MailerSend message_id returned on success
+    delivery_recipient VARCHAR(255), -- Email address the newsletter actually shipped to
     created_at TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
     updated_at TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
 );
@@ -142,3 +149,33 @@ CREATE TABLE IF NOT EXISTS content_briefs (
     generated_at TIMESTAMP_NTZ, -- When the agent last produced this brief
     created_at TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
 );
+
+-- ---------------------------------------------------------------------------
+-- Out-of-band migrations. The CREATE statements above are CREATE-IF-NOT-EXISTS
+-- so they won't alter existing tables. For columns added after a table has
+-- shipped to prod we append explicit ALTER statements here. Each one is
+-- idempotent (Snowflake's IF NOT EXISTS on ADD COLUMN) so the sync is safe
+-- to re-run.
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE newsletters ADD COLUMN IF NOT EXISTS sent_at TIMESTAMP_NTZ;
+ALTER TABLE newsletters ADD COLUMN IF NOT EXISTS delivery_status VARCHAR(50);
+ALTER TABLE newsletters ADD COLUMN IF NOT EXISTS delivery_message_id VARCHAR(255);
+ALTER TABLE newsletters ADD COLUMN IF NOT EXISTS delivery_recipient VARCHAR(255);
+
+-- Auth columns (2026-04-23). Each user row doubles as a login identity with
+-- a bcrypt password hash. `role` is one of 'ADMIN', 'USER', 'COMPANY'. For
+-- role='COMPANY' the user is also linked to a row in `companies` via
+-- `company_id` so the B2B console knows which tenant to render.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'USER';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS company_id VARCHAR(36);
+
+-- Extended company-profile fields (2026-04-23) — power the Strategic Brief
+-- agent's structured output. Optional on the row but treated as mandatory
+-- by the company-profile edit UI.
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS target_audience TEXT;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS key_products TEXT;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS content_pillars TEXT;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS competitors TEXT;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS tone_of_voice VARCHAR(50);

@@ -19,7 +19,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { FeedableArticleRow } from '@/components/DashboardComponents';
 import { PageWrapper } from '@/components/PageWrapper';
-import { UserSwitcher } from '@/components/UserSwitcher';
+import { useAuth } from '@/components/AuthProvider';
 import {
   ApiError,
   getPersona,
@@ -34,22 +34,32 @@ type FeedMode = 'PERSONALIZED' | 'COMMON';
 
 // Same session-scoped key as /user/persona so the two pages share context.
 const STORAGE_KEY = 'curateai:user_id';
-const FEED_LIMIT = 10;
+// Personalized feed keeps the 10-article ceiling (matches the newsletter
+// pipeline); the global deck surfaces the top 20 trending clusters since
+// that's what the common-highlights MCP tool also returns.
+const PERSONAL_LIMIT = 10;
+const COMMON_LIMIT = 20;
 
 export default function UserDashboard() {
+  const { user } = useAuth();
+  const userId = user?.id ?? '';
   const [activeTab, setActiveTab] = useState<FeedMode>('PERSONALIZED');
-  const [userId, setUserId] = useState('');
   const [persona, setPersona] = useState<StoredPersona | null>(null);
   const [articles, setArticles] = useState<RankedArticle[]>([]);
   const [globalArticles, setGlobalArticles] = useState<RankedArticle[]>([]);
-  const [loading, setLoading] = useState(false);
+  // Start in a loading state so the first paint shows a spinner rather than
+  // the "no articles" empty copy — the fetch is kicked off in an effect.
+  const [loading, setLoading] = useState(true);
+  const [globalLoading, setGlobalLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Restore the id from the previous session.
+  // Keep the "last used user" session key in sync for the legacy pages that
+  // still read from it — avoids ripping out every other sessionStorage read.
   useEffect(() => {
-    const saved = typeof window !== 'undefined' ? sessionStorage.getItem(STORAGE_KEY) : null;
-    if (saved) setUserId(saved);
-  }, []);
+    if (userId && typeof window !== 'undefined') {
+      sessionStorage.setItem(STORAGE_KEY, userId);
+    }
+  }, [userId]);
 
   const loadFeed = useCallback(async (id: string, signal?: AbortSignal) => {
     setLoading(true);
@@ -62,11 +72,10 @@ export default function UserDashboard() {
           if (err instanceof ApiError && err.status === 404) return null;
           throw err;
         }),
-        getRecommendations(id, FEED_LIMIT, signal),
+        getRecommendations(id, PERSONAL_LIMIT, signal),
       ]);
       setPersona(personaData);
       setArticles(recsData.results ?? []);
-      sessionStorage.setItem(STORAGE_KEY, id);
     } catch (err) {
       if ((err as Error).name === 'AbortError') return;
       setArticles([]);
@@ -91,13 +100,15 @@ export default function UserDashboard() {
   // any single user. Fetched once on mount so tab switching is instant.
   useEffect(() => {
     const controller = new AbortController();
-    getTopTrends(FEED_LIMIT, undefined, controller.signal)
+    getTopTrends(COMMON_LIMIT, undefined, controller.signal)
       .then((r) => {
         setGlobalArticles(
           r.results.map((t) => ({
             cluster_id: t.cluster_id,
             title: t.title,
             summary: t.summary ?? undefined,
+            url: t.url ?? undefined,
+            source_name: t.source_name ?? undefined,
             score: t.final_trend_score / 100,
             cluster_size: t.cluster_size,
             categories: t.categories,
@@ -107,6 +118,9 @@ export default function UserDashboard() {
       })
       .catch(() => {
         // Tab stays empty on failure — personalized tab has its own error banner.
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setGlobalLoading(false);
       });
     return () => controller.abort();
   }, []);
@@ -127,38 +141,16 @@ export default function UserDashboard() {
   return (
     <PageWrapper>
       <div className="space-y-10">
-        <header className="flex items-start justify-between gap-6 flex-wrap">
+        <header className="flex items-start gap-6 flex-wrap">
           <div className="flex flex-col gap-2">
             <div className="flex items-center gap-2 text-primary font-bold text-sm uppercase tracking-widest">
               <Sparkles className="w-4 h-4" />
-              Welcome back{persona ? `, ${persona.job_title ?? ''}` : ''}
+              Welcome back{user?.full_name ? `, ${user.full_name}` : ''}
             </div>
-            <h1 className="text-4xl font-bold tracking-tight">Your Intelligence Loop</h1>
+            <h1 className="text-4xl font-bold tracking-tight">Your Daily Feed</h1>
             <p className="text-dim text-lg">
               Daily tech updates curated for your <strong>{heroRole}</strong> persona.
             </p>
-          </div>
-
-          {/* Pick an existing user from the dropdown, or type an id directly
-              in the advanced input below. The switcher calls /admin/users to
-              populate itself. */}
-          <div className="flex flex-col gap-2 items-end">
-            <UserSwitcher
-              currentUserId={userId || null}
-              onSelect={(id) => {
-                setUserId(id);
-                if (typeof window !== 'undefined') {
-                  sessionStorage.setItem(STORAGE_KEY, id);
-                }
-              }}
-            />
-            <input
-              type="text"
-              placeholder="or paste a user id…"
-              value={userId}
-              onChange={(e) => setUserId(e.target.value)}
-              className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2 text-xs outline-none focus:border-primary/40 font-mono min-w-[260px]"
-            />
           </div>
         </header>
 
@@ -207,34 +199,43 @@ export default function UserDashboard() {
             <div className="space-y-4">
               {activeTab === 'PERSONALIZED' ? (
                 <>
-                  {!userId && <PromptCard message="Pick a user from the dropdown to load your personalized feed." />}
-
-                  {userId && !loading && articles.length === 0 && !error && (
-                    <PromptCard message="No articles queued — run onboarding, then trigger an ingestion to populate the feed." />
+                  {loading && articles.length === 0 ? (
+                    <FeedSkeleton />
+                  ) : (
+                    <>
+                      {userId && articles.length === 0 && !error && (
+                        <PromptCard message="No articles queued — run onboarding, then trigger an ingestion to populate the feed." />
+                      )}
+                      {articles.map((article) => (
+                        <FeedableArticleRow
+                          key={article.cluster_id}
+                          article={article}
+                          userId={userId}
+                          onFeedback={handleArticleFeedback}
+                        />
+                      ))}
+                    </>
                   )}
-
-                  {articles.map((article) => (
-                    <FeedableArticleRow
-                      key={article.cluster_id}
-                      article={article}
-                      userId={userId}
-                      onFeedback={handleArticleFeedback}
-                    />
-                  ))}
                 </>
               ) : (
                 <>
-                  {globalArticles.length === 0 && (
-                    <PromptCard message="No ranked clusters yet — trigger ingestion + ranking to populate." />
+                  {globalLoading && globalArticles.length === 0 ? (
+                    <FeedSkeleton />
+                  ) : (
+                    <>
+                      {globalArticles.length === 0 && (
+                        <PromptCard message="No ranked clusters yet — trigger ingestion + ranking to populate." />
+                      )}
+                      {globalArticles.map((article) => (
+                        <FeedableArticleRow
+                          key={article.cluster_id}
+                          article={article}
+                          userId={userId}
+                          onFeedback={handleArticleFeedback}
+                        />
+                      ))}
+                    </>
                   )}
-                  {globalArticles.map((article) => (
-                    <FeedableArticleRow
-                      key={article.cluster_id}
-                      article={article}
-                      userId={userId}
-                      onFeedback={handleArticleFeedback}
-                    />
-                  ))}
                 </>
               )}
             </div>
@@ -323,5 +324,27 @@ function PromptCard({ message }: { message: string }) {
     <div className="glass rounded-2xl p-6 border border-dashed border-white/10 text-sm text-dim text-center">
       {message}
     </div>
+  );
+}
+
+function FeedSkeleton() {
+  return (
+    <>
+      <div className="glass rounded-2xl border border-white/5 p-6 flex items-center gap-3 text-dim text-sm">
+        <Loader2 className="w-4 h-4 animate-spin text-primary" />
+        Loading your feed…
+      </div>
+      {[0, 1, 2].map((i) => (
+        <div
+          key={i}
+          className="glass rounded-2xl border border-white/5 p-6 animate-pulse space-y-3"
+        >
+          <div className="h-3 bg-white/5 rounded w-1/4" />
+          <div className="h-5 bg-white/10 rounded w-3/4" />
+          <div className="h-3 bg-white/5 rounded w-full" />
+          <div className="h-3 bg-white/5 rounded w-2/3" />
+        </div>
+      ))}
+    </>
   );
 }

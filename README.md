@@ -146,6 +146,32 @@ AIRFLOW_FERNET_KEY=               # python -c 'from cryptography.fernet import F
 AIRFLOW_ADMIN_USERNAME=admin
 AIRFLOW_ADMIN_PASSWORD=<rotate before demo>
 AIRFLOW_ADMIN_EMAIL=you@example.com
+
+# MailerSend (newsletter delivery)
+# API key is a Secret Manager secret in prod. Leave blank locally to
+# short-circuit sends — the /newsletter/send endpoint will return
+# status=MAILER_DISABLED without contacting the provider.
+MAILERSEND_API_KEY=
+MAILERSEND_FROM_EMAIL=info@test-q3enl6kez3742vwr.mlsender.net
+MAILERSEND_FROM_NAME=CurateAI Newsletter
+# Dev/staging safety rail: when set, every outgoing newsletter is
+# redirected to this address regardless of the user's stored email.
+# Required on MailerSend trial plans (they only deliver to the account
+# owner). Leave EMPTY in production so real users get their own mail.
+MAILERSEND_TEST_RECIPIENT=
+
+# CORS — only read by the backend. Comma-separated list of browser origins
+# allowed to hit the API. Must include every frontend URL (Cloud Run, local
+# dev, preview builds). Defaults to localhost-only when unset.
+CORS_ORIGINS=http://localhost:3000
+
+# JWT / session token signing (falls back to SECRET_KEY if unset)
+JWT_SECRET=                       # optional — uses SECRET_KEY by default
+JWT_EXPIRES_IN=14400              # seconds; matches the frontend idle expiry
+
+# LLM routing knobs (optional — sensible defaults ship in config.py)
+EMBEDDING_MODEL=text-embedding-3-small
+LLM_DEFAULT_MODEL=gpt-4o-mini
 ```
 
 ## Running the full stack on a VM
@@ -183,19 +209,15 @@ Secrets are stored in GCP Secret Manager (`SECRET_KEY`, `SNOWFLAKE_PASSWORD`, `O
 ### B2C (individual readers)
 
 1. **Onboarding** (`/user/onboarding`) — upload one or more PDFs (LinkedIn export, resume). An LLM extracts a structured persona with a 10-category weight vector and one of six archetypes.
-2. **Persona inspector** (`/user/persona`) — see the explicit weights captured at onboarding alongside the behavioral weights that drift from feedback.
-3. **Dashboard** (`/user`) — personalized article feed driven by `SearchService.get_personalized_recommendations`. Each row has like / dislike / skip buttons; the signal flows through `/personas/feedback` and updates the persona in-place.
-4. **Newsletter** (`/newsletter`) — run the B2C LangGraph (curate → write → editor review → publish). The "Fast" toggle skips the editor loop.
-5. **Profile editor** (`/user/profile`) — edit job title, seniority, bio, LinkedIn URL via `PUT /admin/personas/{id}`.
-6. **Newsletter archive** (`/user/newsletters`) — paginated view of past editions with date filter.
+2. **Persona inspector** (`/user/persona`) — see the explicit weights captured at onboarding alongside the behavioral weights that drift from feedback. Toggle "Update Interests" to edit bio + category picks in place.
+3. **My Feed** (`/user`) — personalized article feed driven by `SearchService.get_personalized_recommendations`. Each row has like / dislike / skip buttons; the signal flows through `/personas/feedback` and updates the persona in-place. First paint renders a pulsing skeleton, not the empty-state copy.
+4. **Newsletter** (`/newsletter`) — renders the actual email HTML the user would receive (via `GET /api/v1/newsletter/preview`) in a sandboxed iframe. A date picker flips between today's preview and the archive of past editions. One explicit **Send to My Inbox** button dispatches via MailerSend; it's idempotent per `(user_id, edition_date)` and disables once `sent_at` is stamped. There is no auto-email on generate — delivery is always a manual user or admin action.
 
 ### B2B (corporate tenants)
 
-1. **Drafts** (`/company/drafts`) — kick the B2B LangGraph (intel_extract → report_gen). The agent pulls cross-cluster signals, scores them with a 3-signal urgency algorithm (relevance 40 % + velocity 30 % + competition gap 30 %), and emits a Markdown briefing.
-2. **Company dashboard** (`/company`) — keyword-velocity chart, authority overlap, signal feed.
-3. **Trends table** (`/company/trends`) — filterable keyword table mapped to LEADER / EMERGING / OPPORTUNITY / MATURE.
-4. **Brief archive** (`/company/briefs`) — past briefs keyed by company + date.
-5. **Profile editor** (`/company/profile`) — edit domain, industry, company size, description.
+1. **Strategic Drafts** (`/company/drafts`) — the B2B LangGraph (init → intel_extract → brief_build → render_markdown). The agent scores cross-cluster signals with the 3-signal urgency algorithm (relevance 40 % + velocity 30 % + competition gap 30 %), calls the LLM with a Pydantic-structured `StrategicBrief` response format, cross-joins SpaCy keyword velocity, and pulls reference sources from `articles_raw`. The frontend renders the structured payload (Blue Ocean angle, editorial titles, primary keyword velocity table, detailed content structure, internal linking strategy, reference sources) in the layout from `Temp/SEO_Prototype/UI/index.html`; the raw Markdown brief is kept in a collapsible `<details>`. A **Regenerate** button reruns the agent for today (`?force=true`) so stale briefs can be rebuilt without waiting on the scheduled DAG.
+2. **Keyword Velocity** (`/company/trends`) — SpaCy-driven entity velocity table with SURGING / STABLE / DECLINING tags.
+3. **Company Profile** (`/company/profile`) — edits the 10 tenant fields used by the Strategic Brief agent: name, domain, industry, description, company size, target audience, key products, content pillars, competitors, and tone of voice (enum). Toggle-edit pattern mirrors the user persona page; all fields are mandatory and validated by the backend (422 on missing).
 
 ### Admin
 
@@ -208,12 +230,14 @@ Secrets are stored in GCP Secret Manager (`SECRET_KEY`, `SNOWFLAKE_PASSWORD`, `O
 
 | DAG | Schedule | Does |
 |---|---|---|
-| `ingestion_dag` | @daily | Parallel fan-out (RSS ∥ ArXiv ∥ HN) → MERGE into `articles_raw` → invalidate cache |
-| `deduplication_dag` | @hourly (paused in demo) | URL + semantic dedup → `article_clusters` + Qdrant upsert |
-| `trend_dag` | @daily | Bulk re-rank clusters with 4-tier status (BREAKING / TRENDING / VIRAL / COMMUNITY-PICK / REGULAR) |
-| `b2c_personalization_dag` | @daily | Fan-out — top-10 personalised clusters per user → `daily_selections` |
-| `b2c_newsletter_dag` | @daily | Fan-out — one newsletter per user, persisted to `newsletters` |
-| `b2b_seo_dag` | @daily | Fan-out — one brief per company, persisted to `content_briefs` |
+| `ingestion_dag` | 10:30 UTC daily | Parallel fan-out (RSS ∥ ArXiv ∥ HN) → MERGE into `articles_raw` → invalidate cache |
+| `deduplication_dag` | @hourly | URL + semantic dedup → `article_clusters` + Qdrant upsert |
+| `trend_dag` | 10:50 UTC daily | Bulk re-rank clusters with 4-tier status (BREAKING / TRENDING / VIRAL / COMMUNITY-PICK / REGULAR) |
+| `qdrant_sync_dag` | 11:05 UTC daily | Re-embed every live cluster and bulk-upsert into Qdrant `articles`, so the vector store stays in sync with Snowflake after merges / backfills |
+| `b2c_personalization_dag` | 11:20 UTC daily | Fan-out — top-10 personalised clusters per user → `daily_selections` |
+| `b2c_newsletter_dag` | 11:50 UTC daily | Fan-out — one newsletter per user, persisted to `newsletters`. No auto-email; send is a manual user/admin action. |
+| `b2b_seo_dag` | manual (+ `{"company_id": "…"}` conf) | Fan-out — one structured brief per company, persisted to `content_briefs.structured_brief` |
+| `behavioral_refinement_dag` | @weekly | Decay + boost `user_personas.behavioral_category_weights` |
 | `behavioral_refinement_dag` | @weekly (paused in demo) | P4 rollup — decay + merge 7d of feedback events into `behavioral_category_weights` |
 
 All per-user / per-company DAGs accept `dag_run.conf={"user_id": "…"}` / `{"company_id": "…"}` for on-demand targeted runs.
@@ -322,7 +346,7 @@ Two reasons: (a) Snowflake's VARIANT columns let us store evolving category-weig
 
 ### Why "paused by default" for some DAGs
 
-`deduplication_dag` is scheduled @hourly; `behavioral_refinement_dag` is @weekly but runs a scan over feedback events regardless of whether any exist. Both stay paused during the demo window to avoid surprise runs eating Snowflake compute credits while the TA tests the app. They're one-click to unpause in the Airflow UI.
+The daily pipeline fires as a **staggered chain starting 10:30 UTC** (6:30 AM EDT): ingestion → trend → qdrant_sync → b2c_personalization → b2c_newsletter, with a ~15–30 minute gap between steps so each upstream DAG has time to settle before the next consumes its output. `deduplication_dag` runs **@hourly** continuously to keep clustering reactive to fresh articles. `behavioral_refinement_dag` is **@weekly**. `b2b_seo_dag` is manual-only (trigger from the UI or via `dag_run.conf = {"company_id": "..."}`) since brief generation is user-driven, not time-driven.
 
 ### Why a thin backend for pipelines, not inline execution
 
@@ -368,4 +392,4 @@ Service accounts:
 
 ## License + credits
 
-Academic project — Northeastern University DAMG 7245 Spring 26 Team 1 (Aakash Belide, Abhinav Piyush, Rahul Singh). LLMs via LiteLLM / OpenAI. Framework credits: FastAPI, Next.js, LangGraph, Apache Airflow, Snowflake, Qdrant.
+Academic project — Northeastern University DAMG 7245 Spring 26 Team 1 (Aakash Belide, Abhinav KumarPiyush, Rahul Bothra). LLMs via LiteLLM / OpenAI. Framework credits: FastAPI, Next.js, LangGraph, Apache Airflow, Snowflake, Qdrant.

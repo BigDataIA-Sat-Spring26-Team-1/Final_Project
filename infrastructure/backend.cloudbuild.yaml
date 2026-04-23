@@ -31,7 +31,11 @@ substitutions:
   # Keep the deployed frontend URL as the default — otherwise every rebuild
   # resets CORS_ORIGINS to localhost-only and breaks the production browser.
   # Override via --substitutions for ad-hoc local testing.
-  _CORS_ORIGINS: https://curateai-frontend-sjhg7huf4q-uc.a.run.app,http://localhost:3000
+  # Cloud Run assigns each service TWO public URLs — a hash-based one
+  # (…-sjhg7huf4q-uc.a.run.app) and a project-number one
+  # (…-1013023010679.us-central1.run.app). Browsers land on whichever the
+  # user typed; both must be in the CORS allow-list or the preflight fails.
+  _CORS_ORIGINS: https://curateai-frontend-sjhg7huf4q-uc.a.run.app,https://curateai-frontend-1013023010679.us-central1.run.app,http://localhost:3000
 
   # Non-sensitive Snowflake identifiers. Change here (or via --substitutions)
   # when you move to a new warehouse / database.
@@ -44,6 +48,20 @@ substitutions:
 
   # Qdrant Cloud URL (non-secret — the API key lives in Secret Manager).
   _QDRANT_URL: https://ebb3f6d8-0853-45e8-bfb0-e990b6e31829.us-east4-0.gcp.cloud.qdrant.io
+
+  # MailerSend non-sensitive config. The API key itself is a Secret Manager
+  # secret (MAILERSEND_API_KEY) and is mounted via --set-secrets below.
+  #   _MAILERSEND_FROM_EMAIL — verified sender domain on MailerSend
+  #   _MAILERSEND_FROM_NAME  — the "From" name readers see
+  #   _MAILERSEND_TEST_RECIPIENT — when set, every send is rerouted to this
+  #     address (staging / testing safety rail). Leave EMPTY in production so
+  #     real user emails go out.
+  _MAILERSEND_FROM_EMAIL: info@test-q3enl6kez3742vwr.mlsender.net
+  _MAILERSEND_FROM_NAME: CurateAI Newsletter
+  # Leave empty in production. Set to a single verified address (e.g. the
+  # account owner's mailbox on a MailerSend trial plan) to force-redirect
+  # every outgoing newsletter while debugging.
+  _MAILERSEND_TEST_RECIPIENT: ""
 
 steps:
   # 1) Build with layer cache against the previous :latest image.
@@ -102,10 +120,13 @@ steps:
       # Cloud Logging and bumps log level to INFO. The `^|^` prefix tells
       # gcloud to use `|` as the separator between vars, so the comma inside
       # CORS_ORIGINS (multiple origins) is taken literally.
-      - --set-env-vars=^|^APP_ENV=prod|SNOWFLAKE_ACCOUNT=${_SNOWFLAKE_ACCOUNT}|SNOWFLAKE_USER=${_SNOWFLAKE_USER}|SNOWFLAKE_DATABASE=${_SNOWFLAKE_DATABASE}|SNOWFLAKE_SCHEMA=${_SNOWFLAKE_SCHEMA}|SNOWFLAKE_WAREHOUSE=${_SNOWFLAKE_WAREHOUSE}|SNOWFLAKE_ROLE=${_SNOWFLAKE_ROLE}|QDRANT_URL=${_QDRANT_URL}|CORS_ORIGINS=${_CORS_ORIGINS}
+      - --set-env-vars=^|^APP_ENV=prod|SNOWFLAKE_ACCOUNT=${_SNOWFLAKE_ACCOUNT}|SNOWFLAKE_USER=${_SNOWFLAKE_USER}|SNOWFLAKE_DATABASE=${_SNOWFLAKE_DATABASE}|SNOWFLAKE_SCHEMA=${_SNOWFLAKE_SCHEMA}|SNOWFLAKE_WAREHOUSE=${_SNOWFLAKE_WAREHOUSE}|SNOWFLAKE_ROLE=${_SNOWFLAKE_ROLE}|QDRANT_URL=${_QDRANT_URL}|CORS_ORIGINS=${_CORS_ORIGINS}|MAILERSEND_FROM_EMAIL=${_MAILERSEND_FROM_EMAIL}|MAILERSEND_FROM_NAME=${_MAILERSEND_FROM_NAME}|MAILERSEND_TEST_RECIPIENT=${_MAILERSEND_TEST_RECIPIENT}
       # Secrets pulled from Secret Manager at container start. Format:
       # ENV_VAR_NAME=SECRET_NAME:VERSION (":latest" always follows the newest).
-      - --set-secrets=SECRET_KEY=SECRET_KEY:latest,SNOWFLAKE_PASSWORD=SNOWFLAKE_PASSWORD:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest
+      # MAILERSEND_API_KEY is optional — if the secret isn't created yet,
+      # deploy-time validation fails fast. Create it before rolling this out:
+      #   echo -n "<key>" | gcloud secrets create MAILERSEND_API_KEY --data-file=-
+      - --set-secrets=SECRET_KEY=SECRET_KEY:latest,SNOWFLAKE_PASSWORD=SNOWFLAKE_PASSWORD:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,QDRANT_API_KEY=QDRANT_API_KEY:latest,MAILERSEND_API_KEY=MAILERSEND_API_KEY:latest
 
 # Push images to Artifact Registry (Cloud Build also retains a copy).
 images:

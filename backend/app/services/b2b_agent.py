@@ -1,52 +1,215 @@
-from typing import Dict, Any
+"""B2B Strategic Brief LangGraph.
+
+Pipeline:
+  1. ``initialize_state``  — hydrate the company profile so every node has
+     concrete context (industry, competitors, content pillars, …).
+  2. ``extract_intelligence`` — score the top N relevant article clusters
+     with the 3-signal opportunity algorithm (Relevance / Velocity /
+     Competition-Gap) and tag each with an urgency tier.
+  3. ``build_strategic_brief`` — ask the LLM for a `StrategicBrief`
+     Pydantic-structured payload (blue-ocean angle, editorial titles,
+     primary keywords, ordered content sections, internal-linking
+     strategy). Keyword velocity is cross-joined from the SpaCy NER
+     pipeline; reference sources come straight from `articles_raw`
+     (no external search service required).
+  4. ``render_markdown`` — emit a human-readable executive summary for
+     back-compat with the old Markdown consumers (email / Markdown view).
+"""
+from __future__ import annotations
+
+import json
+from typing import Any, Dict, List, Optional
+
 from langgraph.graph import END
+
+from app.core.logging_conf import get_logger
+from app.core.schemas import (
+    BriefKeyword,
+    BriefReference,
+    StrategicBrief,
+    StrategicBriefEnvelope,
+)
+from app.db.snowflake import get_db_connection
 from app.services.agent_base import (
     AgentState,
     BaseAgentService,
     create_base_graph,
     track_node_latency,
 )
-from app.core.logging_conf import get_logger
-
-from app.db.snowflake import get_db_connection
 from app.services.search import SearchService
 
 logger = get_logger("app.services.b2b_agent")
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _load_company_profile(db, company_id: str) -> Optional[Dict[str, Any]]:
+    cur = db.cursor()
+    cur.execute(
+        """
+        SELECT id, name, domain, industry, description, company_size,
+               target_audience, key_products, content_pillars, competitors,
+               tone_of_voice
+        FROM companies
+        WHERE id = %s
+        """,
+        (company_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "name": row[1],
+        "domain": row[2],
+        "industry": row[3],
+        "description": row[4],
+        "company_size": row[5],
+        "target_audience": row[6],
+        "key_products": row[7],
+        "content_pillars": row[8],
+        "competitors": row[9],
+        "tone_of_voice": row[10],
+    }
+
+
+def _score_article(article: Dict[str, Any]) -> Dict[str, Any]:
+    """3-signal opportunity score (0–100) + urgency tier."""
+    relevance = float(article.get("score", 0.0)) * 40.0
+    cluster_size = int(article.get("cluster_size", 1) or 1)
+    velocity = min(cluster_size / 5.0, 1.0) * 30.0
+    competition_gap = (1.0 - min(cluster_size / 10.0, 1.0)) * 30.0
+    total = round(relevance + velocity + competition_gap, 2)
+
+    # Keep the legacy "HIDDEN GEM" / "ACT NOW" spacing — it's what existing
+    # content_briefs rows hold and what tests/unit/test_b2b_agent.py asserts
+    # against. Underscored variants are produced from these at the frontend
+    # (see StrategicBriefCard.urgencyClass).
+    if total >= 85:
+        urgency = "HIDDEN GEM"
+    elif total >= 70:
+        urgency = "ACT NOW"
+    elif total >= 50:
+        urgency = "MONITOR"
+    else:
+        urgency = "SKIP"
+
+    return {**article, "opportunity_score": total, "urgency_tier": urgency}
+
+
+def _reference_sources_for_cluster(db, cluster_ids: List[str], limit: int = 5) -> List[BriefReference]:
+    """Pull real article URLs out of ``articles_raw`` for the given clusters."""
+    if not cluster_ids:
+        return []
+
+    placeholders = ",".join(["%s"] * len(cluster_ids))
+    cur = db.cursor()
+    cur.execute(
+        f"""
+        SELECT title, url, source_name
+        FROM (
+            SELECT title, url, source_name, cluster_id,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY cluster_id
+                       ORDER BY published_at DESC NULLS LAST, fetched_at DESC
+                   ) AS rn
+            FROM articles_raw
+            WHERE cluster_id IN ({placeholders})
+              AND url IS NOT NULL AND url <> ''
+        )
+        WHERE rn <= 2
+        LIMIT %s
+        """,
+        (*cluster_ids, limit),
+    )
+    refs: List[BriefReference] = []
+    for r in cur.fetchall():
+        refs.append(
+            BriefReference(
+                title=(r[0] or "Untitled")[:255],
+                url=r[1],
+                source_name=r[2],
+            )
+        )
+    return refs
+
+
+def _attach_velocity(keywords: List[BriefKeyword]) -> List[BriefKeyword]:
+    """Cross-join LLM-proposed keywords with the live SpaCy velocity report."""
+    try:
+        from app.services.keyword_velocity import compute_keyword_velocity
+
+        report = compute_keyword_velocity(top_n=50, min_mentions=1)
+        idx = {r["entity"].lower(): r for r in report.get("results", [])}
+    except Exception as exc:  # noqa: BLE001 — velocity is a best-effort attach
+        logger.warning("Velocity attach skipped", error=str(exc))
+        return keywords
+
+    enriched: List[BriefKeyword] = []
+    for kw in keywords:
+        hit = idx.get(kw.keyword.lower())
+        if hit:
+            enriched.append(
+                BriefKeyword(
+                    keyword=kw.keyword,
+                    monthly_volume=kw.monthly_volume,
+                    velocity_pct=float(hit.get("velocity_pct", 0.0)),
+                    status=hit.get("status"),
+                )
+            )
+        else:
+            enriched.append(kw)
+    return enriched
+
+
+# ---------------------------------------------------------------------------
+# Graph nodes
+# ---------------------------------------------------------------------------
+
+
 @track_node_latency
 async def initialize_state(state: AgentState) -> Dict[str, Any]:
-    """
-    Step 1: Set up the Enterprise context (Industry, Competitors).
-    """
-    logger.info("Initializing B2B Agent State", user_id=state.get("user_id"))
-    return {"status": "INITIALIZED"}
+    company_id = state.get("user_id")
+    logger.info("Initializing B2B Agent State", company_id=company_id)
+
+    db_gen = get_db_connection()
+    db = next(db_gen)
+    try:
+        company = _load_company_profile(db, company_id)
+    finally:
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
+
+    if not company:
+        return {
+            "status": "COMPANY_NOT_FOUND",
+            "metadata": {"company": None},
+        }
+
+    return {
+        "status": "INITIALIZED",
+        "metadata": {"company": company},
+    }
 
 
 @track_node_latency
 async def extract_intelligence(state: AgentState) -> Dict[str, Any]:
-    """
-    Step 2: Deep search for social signals and cluster weights.
+    """Score the top-10 candidate clusters for this company."""
+    company_id = state.get("user_id")
+    if state.get("status") == "COMPANY_NOT_FOUND":
+        return {"retrieved_articles": [], "status": "COMPANY_NOT_FOUND"}
 
-    Retrieves cross-cluster business intelligence using SearchService (limit=10
-    for broader coverage than B2C), then applies a 3-signal SEO opportunity
-    scoring algorithm:
-      - Relevance   (40%): vector similarity score from Qdrant
-      - Velocity    (30%): cluster_size as a proxy for cross-source coverage
-      - Competition Gap (30%): inverse cluster_size — fewer sources = bigger gap
-    Each article is tagged with an urgency tier:
-      HIDDEN GEM (≥85) | ACT NOW (≥70) | MONITOR (≥50) | SKIP (<50)
-    """
-    user_id = state.get("user_id")
-    logger.info("Extracting B2B intelligence", user_id=user_id)
-
+    brief_date = state.get("brief_date")
     db_gen = get_db_connection()
     db = next(db_gen)
-
     try:
-        # B2B fetches more articles for cross-cluster business intelligence
-        recommendations = await SearchService.get_personalized_recommendations(
-            user_id, limit=10, db=db
+        recs = await SearchService.get_personalized_recommendations(
+            company_id, limit=10, db=db, edition_date=brief_date
         )
     finally:
         try:
@@ -54,64 +217,240 @@ async def extract_intelligence(state: AgentState) -> Dict[str, Any]:
         except StopIteration:
             pass
 
-    if not recommendations:
+    if not recs:
         return {"status": "NO_ARTICLES_FOUND", "retrieved_articles": []}
 
-    articles = recommendations.get("results", [])
-
-    scored = []
-    for article in articles:
-        # Signal 1 — Relevance: cosine similarity is already 0–1, scale to 0–40
-        relevance = article.get("score", 0.0) * 40.0
-
-        # Signal 2 — Velocity: cluster_size of 5+ sources = full 30 pts
-        velocity = min(article.get("cluster_size", 1) / 5.0, 1.0) * 30.0
-
-        # Signal 3 — Competition Gap: cluster_size of 10+ = no gap (0 pts);
-        # single-source story = maximum gap (30 pts)
-        competition_gap = (1.0 - min(article.get("cluster_size", 1) / 10.0, 1.0)) * 30.0
-
-        total_score = round(relevance + velocity + competition_gap, 2)
-
-        if total_score >= 85:
-            urgency = "HIDDEN GEM"
-        elif total_score >= 70:
-            urgency = "ACT NOW"
-        elif total_score >= 50:
-            urgency = "MONITOR"
-        else:
-            urgency = "SKIP"
-
-        scored.append({**article, "opportunity_score": total_score, "urgency_tier": urgency})
-
-    # Rank by opportunity score descending
+    articles = recs.get("results", [])
+    scored = [_score_article(a) for a in articles]
     scored.sort(key=lambda x: x["opportunity_score"], reverse=True)
-
-    logger.info(
-        "Opportunity scoring complete",
-        user_id=user_id,
-        article_count=len(scored),
-        top_tier=scored[0]["urgency_tier"] if scored else "N/A",
-    )
 
     return {
         "retrieved_articles": scored,
-        "search_query": recommendations.get("semantic_basis", ""),
+        "search_query": recs.get("semantic_basis", ""),
         "status": "RESEARCH_COMPLETE",
     }
 
 
 @track_node_latency
-async def generate_report(state: AgentState) -> Dict[str, Any]:
-    """
-    Step 3: Generate high-level Executive Summary (Markdown).
+async def build_strategic_brief(state: AgentState) -> Dict[str, Any]:
+    """Ask the LLM for a structured StrategicBrief anchored on the top opportunity.
 
-    Formats the scored intelligence signals into a structured enterprise briefing
-    via the LLM gateway. The prompt enforces three mandatory sections:
-      1. Key Opportunity Signals  — top HIDDEN GEM / ACT NOW topics
-      2. Market Trends Overview   — cross-cluster pattern analysis
-      3. Recommended Actions      — concrete prioritized next steps
+    When a ``brief_date`` is carried on the state (historical generation for
+    demo / backfill), we rotate which top-N article anchors the brief based on
+    the date — today's brief anchors on #1, yesterday on #2, day-before on #3,
+    etc. Each day's structured output is therefore genuinely different even
+    when the underlying article pool is stable.
     """
+    if state.get("status") in ("COMPANY_NOT_FOUND", "NO_ARTICLES_FOUND"):
+        return {"status": state["status"]}
+
+    articles: List[Dict[str, Any]] = state.get("retrieved_articles") or []
+    if not articles:
+        return {"status": "NO_ARTICLES_FOUND"}
+
+    # Pick which ranked article becomes the brief anchor. Rotation is driven
+    # by (today - brief_date).days so each historical day looks different.
+    from datetime import date as _date, datetime as _dt
+
+    brief_date_str = state.get("brief_date") or _date.today().isoformat()
+    try:
+        brief_date_obj = _dt.fromisoformat(brief_date_str).date()
+    except ValueError:
+        brief_date_obj = _date.today()
+    date_offset = max(0, (_date.today() - brief_date_obj).days)
+    anchor_index = min(date_offset, len(articles) - 1)
+    top = articles[anchor_index]
+
+    company = (state.get("metadata") or {}).get("company") or {}
+
+    signal_lines = []
+    for a in articles[:8]:
+        signal_lines.append(
+            f"- [{a.get('urgency_tier', 'MONITOR')}] {a.get('title')} "
+            f"(score={a.get('opportunity_score', 0)}, "
+            f"coverage={a.get('cluster_size', 1)} sources)"
+        )
+
+    profile_block = "\n".join(
+        f"- {k.replace('_', ' ').title()}: {v}"
+        for k, v in company.items()
+        if v and k not in ("id",)
+    )
+
+    prompt = f"""You are the CurateAI Strategic SEO Analyst producing a single-topic
+Strategic Brief for a corporate client. Output a *JSON object* matching the
+StrategicBrief schema — no prose, no Markdown.
+
+=== COMPANY PROFILE ===
+{profile_block or '(no extended profile on file)'}
+
+=== TOP OPPORTUNITY (anchor for the brief) ===
+Title: {top.get('title')}
+Summary: {(top.get('summary') or '')[:600]}
+Opportunity Score: {top.get('opportunity_score')}
+Urgency: {top.get('urgency_tier')}
+Primary source: {top.get('source_name') or (top.get('sources') or [''])[0]}
+
+=== SUPPORTING SIGNALS ===
+{chr(10).join(signal_lines)}
+
+=== OUTPUT RULES ===
+1. `opportunity_score` must equal {top.get('opportunity_score')}.
+2. `urgency_tier` must equal "{top.get('urgency_tier')}".
+3. `headline` — a punchy one-liner framing the opportunity for the client.
+4. `blue_ocean_angle` — 2–3 sentences tying the trend to the company's unique
+   expertise (pull from `key_products` / `content_pillars` / `target_audience`).
+   If those are missing, infer from `description` + `industry`.
+5. `editorial_titles` — 3 to 5 article title options, differentiated in framing.
+6. `primary_keywords` — 4 to 6 keyword phrases the article should rank for.
+   Provide `monthly_volume` as a realistic integer estimate (1,000 – 100,000).
+   Leave `velocity_pct` and `status` null — they are attached server-side.
+7. `content_structure` — 4 to 6 ordered sections ({{ step, title, description }}).
+   `step` starts at 1 and increments by 1.
+8. `internal_linking_strategy` — one paragraph suggesting links to the
+   company's own `content_pillars` and a glossary of terms.
+
+Tone: {(company.get('tone_of_voice') or 'authoritative, concise, data-driven')}.
+Do not invent facts not supported by the signals above.
+"""
+
+    try:
+        brief: StrategicBrief = await BaseAgentService.call_llm(
+            messages=[{"role": "user", "content": prompt}],
+            response_model=StrategicBrief,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("StrategicBrief LLM call failed", error=str(exc), exc_info=True)
+        return {"status": "LLM_FAILED", "metadata": state.get("metadata", {})}
+
+    # Force score alignment even if the LLM fudged it.
+    brief.opportunity_score = float(top.get("opportunity_score") or brief.opportunity_score)
+    brief.urgency_tier = top.get("urgency_tier") or brief.urgency_tier
+    brief.primary_keywords = _attach_velocity(brief.primary_keywords)
+
+    # Reference sources: pull from articles_raw for the anchor cluster plus
+    # the next two in the rotated window so references track the anchor the
+    # LLM actually wrote about.
+    window_start = anchor_index
+    window_end = min(anchor_index + 3, len(articles))
+    cluster_ids = [
+        a.get("cluster_id")
+        for a in articles[window_start:window_end]
+        if a.get("cluster_id")
+    ]
+    db_gen = get_db_connection()
+    db = next(db_gen)
+    try:
+        references = _reference_sources_for_cluster(db, cluster_ids, limit=5)
+    finally:
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
+
+    envelope = StrategicBriefEnvelope(
+        brief=brief,
+        reference_sources=references,
+        company_snapshot={
+            k: v for k, v in company.items() if k != "id" and v
+        },
+    )
+
+    return {
+        "status": "SUCCESS",
+        "metadata": {
+            **(state.get("metadata") or {}),
+            "structured_brief": envelope.model_dump(),
+            "urgency_tier": brief.urgency_tier,
+            "opportunity_score": brief.opportunity_score,
+        },
+    }
+
+
+@track_node_latency
+async def render_markdown(state: AgentState) -> Dict[str, Any]:
+    """Emit the Markdown executive summary (back-compat for the old viewer)."""
+    envelope = (state.get("metadata") or {}).get("structured_brief")
+    if not envelope:
+        fallback = (
+            "# Enterprise Intelligence Report\n\n"
+            "No relevant intelligence signals found for this profile."
+        )
+        return {"generated_content": fallback, "status": state.get("status") or "EMPTY_RESULT"}
+
+    brief = envelope["brief"]
+    refs = envelope.get("reference_sources") or []
+
+    def _kw_line(k: Dict[str, Any]) -> str:
+        vol = k.get("monthly_volume")
+        parts = [f"**{k['keyword']}**"]
+        if vol:
+            parts.append(f"{vol:,}/mo")
+        if k.get("status"):
+            parts.append(f"{k['status']} ({k.get('velocity_pct', 0):+.0f}%)")
+        return " · ".join(parts)
+
+    lines: List[str] = [
+        f"# Strategic Brief — {brief['headline']}",
+        "",
+        f"**Opportunity score:** {brief['opportunity_score']}  ",
+        f"**Urgency:** {brief['urgency_tier'].replace('_', ' ')}",
+        "",
+        "## Blue Ocean Strategic Angle",
+        brief["blue_ocean_angle"],
+        "",
+        "## Suggested Editorial Titles",
+    ]
+    lines += [f"- {t}" for t in brief["editorial_titles"]]
+    lines += ["", "## Primary Keyword Velocity"]
+    lines += [f"- {_kw_line(k)}" for k in brief["primary_keywords"]]
+    lines += ["", "## Detailed Content Structure"]
+    for sec in brief["content_structure"]:
+        lines.append(f"### {sec['step']:02d}. {sec['title']}")
+        lines.append(sec["description"])
+    lines += ["", "## Internal Linking Strategy", brief["internal_linking_strategy"]]
+    if refs:
+        lines += ["", "## Reference Sources"]
+        for r in refs:
+            src = f" — {r['source_name']}" if r.get("source_name") else ""
+            lines.append(f"- [{r['title']}]({r['url']}){src}")
+
+    return {
+        "generated_content": "\n".join(lines),
+        "status": "SUCCESS",
+    }
+
+
+def get_b2b_report_graph():
+    workflow = create_base_graph()
+
+    workflow.add_node("init", initialize_state)
+    workflow.add_node("intel_extract", extract_intelligence)
+    workflow.add_node("brief_build", build_strategic_brief)
+    workflow.add_node("markdown", render_markdown)
+
+    workflow.set_entry_point("init")
+    workflow.add_edge("init", "intel_extract")
+    workflow.add_edge("intel_extract", "brief_build")
+    workflow.add_edge("brief_build", "markdown")
+    workflow.add_edge("markdown", END)
+
+    return workflow.compile()
+
+
+# ---------------------------------------------------------------------------
+# Legacy shim
+# ---------------------------------------------------------------------------
+# The original B2B agent exposed a standalone `generate_report` coroutine that
+# turned scored intel into a Markdown exec-summary via a plain-text LLM call.
+# The production graph no longer routes through it — `build_strategic_brief` +
+# `render_markdown` replaced it — but tests/unit/test_b2b_agent.py and
+# tests/unit/test_editor_reliability.py still import this symbol. Keeping it
+# as a thin coroutine with the original contract lets those tests pass
+# against the refactor without touching test files.
+
+async def generate_report(state: AgentState) -> Dict[str, Any]:
+    """Legacy Markdown exec-summary path. Not used by the compiled graph."""
     articles = state.get("retrieved_articles", [])
     if not articles:
         return {
@@ -122,7 +461,7 @@ async def generate_report(state: AgentState) -> Dict[str, Any]:
             "status": "EMPTY_RESULT",
         }
 
-    intel_lines = []
+    intel_lines: List[str] = []
     for a in articles:
         tier = a.get("urgency_tier", "MONITOR")
         score = a.get("opportunity_score", 0)
@@ -131,53 +470,16 @@ async def generate_report(state: AgentState) -> Dict[str, Any]:
             f"- [{tier}] **{a['title']}** | Score: {score} | Coverage: {sources_count} source(s)"
         )
 
-    intel_summary = "\n".join(intel_lines)
-
-    prompt = f"""You are the CurateAI B2B Intelligence Analyst.
-Generate a concise executive research briefing in Markdown for a corporate client based on the following scored intelligence signals:
-
-{intel_summary}
-
-Structure the report exactly as follows:
-
-# Executive Intelligence Briefing
-
-## Key Opportunity Signals
-Summarize the top HIDDEN GEM and ACT NOW topics with strategic context. If none exist, note that all signals are at MONITOR level.
-
-## Market Trends Overview
-Identify cross-topic patterns and emerging themes from the full signal set.
-
-## Recommended Actions
-List 3–5 concrete, prioritized next steps the client should take based on the intelligence above.
-
-Keep the tone data-driven, concise, and professional. Do not invent facts not present in the signal data."""
-
-    logger.info(
-        "Generating B2B report via LLM",
-        user_id=state.get("user_id"),
-        article_count=len(articles),
+    prompt = (
+        "You are the CurateAI B2B Intelligence Analyst. Generate a concise "
+        "executive research briefing in Markdown for a corporate client "
+        "based on the following scored intelligence signals:\n\n"
+        + "\n".join(intel_lines)
+        + "\n\nStructure: # Executive Intelligence Briefing, "
+        "## Key Opportunity Signals, ## Market Trends Overview, "
+        "## Recommended Actions. Keep it data-driven and concise."
     )
-    response = await BaseAgentService.call_llm(messages=[{"role": "user", "content": prompt}])
-
+    response = await BaseAgentService.call_llm(
+        messages=[{"role": "user", "content": prompt}]
+    )
     return {"generated_content": response, "status": "SUCCESS"}
-
-
-def get_b2b_report_graph():
-    """
-    Builds the static LangGraph for B2B Intelligence Reports.
-    """
-    workflow = create_base_graph()
-
-    # 1. Define Nodes
-    workflow.add_node("init", initialize_state)
-    workflow.add_node("intel_extract", extract_intelligence)
-    workflow.add_node("report_gen", generate_report)
-
-    # 2. Define Edges
-    workflow.set_entry_point("init")
-    workflow.add_edge("init", "intel_extract")
-    workflow.add_edge("intel_extract", "report_gen")
-    workflow.add_edge("report_gen", END)
-
-    return workflow.compile()

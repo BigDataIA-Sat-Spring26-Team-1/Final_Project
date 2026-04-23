@@ -24,7 +24,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.api import admin, b2b, deduplication, ingestion, personas, search, trend
+from app.api import admin, auth, b2b, deduplication, ingestion, personas, search, trend
 from app.api.newsletter import router as newsletter_router
 from app.core.config import Settings, get_settings
 from app.core.errors import ErrorResponse
@@ -108,6 +108,7 @@ async def request_context_middleware(request: Request, call_next):
     HTTP_REQUEST_DURATION.labels(
         method=request.method,
         endpoint=request.url.path,
+        status=str(response.status_code),
     ).observe(duration)
 
     response.headers["X-Process-Time"] = f"{duration:.4f}"
@@ -167,6 +168,7 @@ app.include_router(search.router, prefix="/api/v1/search", tags=["Retrieval"])
 app.include_router(b2b.router, prefix="/api/v1/b2b", tags=["B2B Intelligence"])
 app.include_router(newsletter_router, prefix="/api/v1/newsletter", tags=["Newsletter Delivery"])
 app.include_router(admin.router, prefix="/api/v1/admin", tags=["Admin"])
+app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])
 
 
 # ---- System endpoints --------------------------------------------------------

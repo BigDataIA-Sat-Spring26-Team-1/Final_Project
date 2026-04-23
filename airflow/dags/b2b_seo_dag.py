@@ -21,6 +21,12 @@ log = logging.getLogger("airflow.task")
 
 
 def resolve_companies(**context):
+    """Pick companies that still need a brief for today.
+
+    Explicit ``company_id`` in conf always wins. Otherwise we skip any company
+    that already has a brief dated today — the API-triggered path (or an
+    earlier DAG run) has already generated it and we don't want duplicates.
+    """
     conf = context.get("dag_run").conf if context.get("dag_run") else {}
     explicit = (conf or {}).get("company_id")
     if explicit:
@@ -29,11 +35,21 @@ def resolve_companies(**context):
     ensure_backend_on_path()
     from app.db.snowflake import get_db_connection
 
+    today = date.today().isoformat()
     db_gen = get_db_connection()
     db = next(db_gen)
     try:
         cur = db.cursor()
-        cur.execute("SELECT id FROM companies")
+        cur.execute(
+            """
+            SELECT c.id FROM companies c
+            WHERE NOT EXISTS (
+                SELECT 1 FROM content_briefs b
+                WHERE b.company_id = c.id AND b.brief_date = %s
+            )
+            """,
+            (today,),
+        )
         return [row[0] for row in cur.fetchall() if row[0]]
     finally:
         try:
@@ -44,6 +60,8 @@ def resolve_companies(**context):
 
 def generate_briefs(**context):
     ensure_backend_on_path()
+    import json
+
     from app.db.snowflake import get_db_connection
     from app.services.b2b_agent import get_b2b_report_graph
 
@@ -56,6 +74,7 @@ def generate_briefs(**context):
     graph = get_b2b_report_graph()
     loop = asyncio.new_event_loop()
 
+    today_iso = date.today().isoformat()
     db_gen = get_db_connection()
     db = next(db_gen)
     succeeded = 0
@@ -66,10 +85,12 @@ def generate_briefs(**context):
             try:
                 # The B2B graph takes a ``user_id`` that actually carries the
                 # corporate client identifier — the name is a legacy artifact.
+                # ``brief_date`` seeds the structured-brief anchor rotation.
+                init_state = {"user_id": cid, "brief_date": today_iso}
                 if hasattr(graph, "ainvoke"):
-                    state = loop.run_until_complete(graph.ainvoke({"user_id": cid}))
+                    state = loop.run_until_complete(graph.ainvoke(init_state))
                 else:
-                    state = graph.invoke({"user_id": cid})
+                    state = graph.invoke(init_state)
 
                 # The B2B graph stores its output under ``generated_content`` —
                 # same convention as the B2C agent — not ``final_report``.
@@ -77,18 +98,24 @@ def generate_briefs(**context):
                 if not brief_md.strip():
                     raise RuntimeError("Agent returned empty brief.")
 
+                metadata = (state or {}).get("metadata") or {}
+                structured_brief = metadata.get("structured_brief")
+                urgency_tier = metadata.get("urgency_tier") or "MONITOR"
+
                 cur.execute(
                     """
                     INSERT INTO content_briefs
-                        (id, company_id, brief_date, brief_content, urgency_tier, status, generated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP())
+                        (id, company_id, brief_date, brief_content, urgency_tier,
+                         structured_brief, status, generated_at)
+                    SELECT %s, %s, %s, %s, %s, PARSE_JSON(%s), %s, CURRENT_TIMESTAMP()
                     """,
                     (
                         str(uuid.uuid4()),
                         cid,
-                        date.today().isoformat(),
+                        today_iso,
                         brief_md,
-                        (state or {}).get("urgency_tier", "MONITOR"),
+                        urgency_tier,
+                        json.dumps(structured_brief) if structured_brief else None,
                         "GENERATED",
                     ),
                 )
@@ -116,8 +143,11 @@ def generate_briefs(**context):
 with DAG(
     dag_id="b2b_seo_dag",
     default_args=default_args(),
-    description="Generate per-company B2B intelligence briefs",
-    schedule_interval="@daily",
+    description="Generate per-company B2B intelligence briefs (manual trigger only)",
+    # Briefs run on-demand from the frontend / backend; there is no daily
+    # cadence. Setting schedule_interval=None keeps the DAG available in the
+    # Airflow UI for manual triggers without scheduling it automatically.
+    schedule_interval=None,
     catchup=False,
     max_active_runs=1,
     tags=["b2b", "seo", "curateai"],

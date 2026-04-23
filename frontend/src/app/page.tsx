@@ -1,216 +1,261 @@
 'use client';
 
-// Home / system overview. Reads liveness + Snowflake readiness from the
-// backend and (when a user id is set) shows the top personalized recs as the
-// "recent ingestion stream". The numerical stat cards currently hold
-// placeholder values — they'll wire up once a dedicated /admin/stats endpoint
-// exists (tracked in the pending tasks doc).
+// Public landing page. Renders without the authenticated sidebar so visitors
+// who land here unauthenticated can read the pitch and then drive into
+// /login or /signup. Copy is deliberately generic — it describes both the
+// consumer (personalized newsletters) and enterprise (SEO briefs) sides.
 
 import {
-  Activity,
+  ArrowRight,
   Brain,
   CheckCircle2,
-  Clock,
-  Loader2,
-  Newspaper,
-  TrendingUp,
-  TriangleAlert,
-  Zap,
+  Gauge,
+  LineChart,
+  Mail,
+  Rocket,
+  Sparkles,
+  Wand2,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import Link from 'next/link';
 
-import {
-  ActivityItem,
-  StatCard,
-  TrendTag,
-} from '@/components/DashboardComponents';
-import { PageWrapper } from '@/components/PageWrapper';
-import {
-  ApiError,
-  getHealth,
-  getRecommendations,
-  type HealthResponse,
-  type RankedArticle,
-} from '@/lib/api';
+import { useAuth, homeForRole } from '@/components/AuthProvider';
 
-const STORAGE_KEY = 'curateai:user_id';
-
-export default function Home() {
-  const [userId, setUserId] = useState('');
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [healthError, setHealthError] = useState<string | null>(null);
-  const [articles, setArticles] = useState<RankedArticle[]>([]);
-  const [loadingArticles, setLoadingArticles] = useState(false);
-
-  // Pull health on mount — gives us an immediate signal of whether the backend
-  // is even reachable, and surfaces the Snowflake version we're talking to.
-  useEffect(() => {
-    const controller = new AbortController();
-    getHealth(controller.signal)
-      .then(setHealth)
-      .catch((err) => {
-        if (err.name === 'AbortError') return;
-        setHealthError(
-          err instanceof ApiError
-            ? `${err.status}: ${err.detail ?? err.message}`
-            : (err as Error).message,
-        );
-      });
-    const saved = sessionStorage.getItem(STORAGE_KEY);
-    if (saved) setUserId(saved);
-    return () => controller.abort();
-  }, []);
-
-  // Ingestion stream = top personalized articles. Only meaningful when a
-  // user id is available; otherwise we leave the section empty rather than
-  // filling it with stale fake data. The loading flag flips via the async
-  // chain (not synchronously in the effect body) to satisfy React 19's
-  // set-state-in-effect linter.
-  useEffect(() => {
-    if (!userId) return;
-    const controller = new AbortController();
-    (async () => {
-      setLoadingArticles(true);
-      try {
-        const r = await getRecommendations(userId, 4, controller.signal);
-        setArticles(r.results ?? []);
-      } catch (err) {
-        if ((err as Error).name !== 'AbortError') setArticles([]);
-      } finally {
-        setLoadingArticles(false);
-      }
-    })();
-    return () => controller.abort();
-  }, [userId]);
+export default function LandingPage() {
+  const { status, user } = useAuth();
+  const primaryCta =
+    status === 'authenticated' && user
+      ? { href: homeForRole(user.role), label: 'Open your console' }
+      : { href: '/signup', label: 'Get started free' };
 
   return (
-    <PageWrapper>
-      <div className="space-y-10">
-        <header className="flex items-end justify-between gap-6 flex-wrap">
-          <div className="flex flex-col gap-2">
-            <h1 className="text-4xl font-bold tracking-tight">Intelligence Overview</h1>
-            <p className="text-muted-foreground text-lg">
-              System heartbeat and content curation metrics.
-            </p>
-          </div>
-          <input
-            type="text"
-            placeholder="user id for personalized stream"
-            value={userId}
-            onChange={(e) => setUserId(e.target.value)}
-            onBlur={() => userId && sessionStorage.setItem(STORAGE_KEY, userId)}
-            className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm outline-none focus:border-primary/40 font-mono min-w-[280px]"
-          />
-        </header>
-
-        {/* System status banner — only rendered when something interesting to say. */}
-        {healthError ? (
-          <div className="rounded-2xl border border-rose-500/20 bg-rose-500/5 p-4 flex items-start gap-3">
-            <TriangleAlert className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
-            <div>
-              <p className="text-sm font-bold text-rose-200">Backend unreachable</p>
-              <p className="text-xs text-rose-300/80">{healthError}</p>
+    <div className="min-h-screen bg-background text-foreground">
+      {/* Header */}
+      <header className="relative z-10">
+        <div className="max-w-6xl mx-auto px-6 lg:px-10 py-6 flex items-center justify-between">
+          <Link href="/" className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center font-black text-xs text-primary-foreground">
+              C
             </div>
-          </div>
-        ) : health ? (
-          <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4 flex items-center gap-3 flex-wrap">
-            <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-            <p className="text-sm">
-              <strong className="text-emerald-400">{health.status}</strong>
-              <span className="text-dim"> — {health.app_name} v{health.version}</span>
-              <span className="text-dim"> · env: {health.environment}</span>
-              <span className="text-dim"> · snowflake: {health.snowflake_version}</span>
-            </p>
-          </div>
-        ) : null}
+            <span className="text-xl font-bold tracking-tight gradient-text">CurateAI</span>
+          </Link>
+          <nav className="flex items-center gap-2">
+            {status === 'authenticated' ? (
+              <Link
+                href={primaryCta.href}
+                className="px-4 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-bold hover:bg-primary/90 transition"
+              >
+                {primaryCta.label}
+              </Link>
+            ) : (
+              <>
+                <Link
+                  href="/login"
+                  className="px-4 py-2 rounded-xl text-sm font-bold text-muted-foreground hover:text-white transition"
+                >
+                  Log in
+                </Link>
+                <Link
+                  href="/signup"
+                  className="px-4 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-bold hover:bg-primary/90 transition inline-flex items-center gap-2"
+                >
+                  Sign up <ArrowRight className="w-4 h-4" />
+                </Link>
+              </>
+            )}
+          </nav>
+        </div>
+      </header>
 
+      {/* Hero */}
+      <section className="relative">
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[600px] bg-primary/10 blur-[140px] rounded-full -z-0" />
+        <div className="relative max-w-5xl mx-auto px-6 lg:px-10 pt-20 pb-24 text-center space-y-8">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-primary/30 bg-primary/5 text-primary text-[11px] uppercase tracking-widest font-bold">
+            <Sparkles className="w-3.5 h-3.5" />
+            Real-time content intelligence
+          </div>
+          <h1 className="text-5xl lg:text-7xl font-extrabold tracking-tight leading-[1.05]">
+            Your <span className="gradient-text">daily tech brief</span>,
+            <br className="hidden md:block" /> personalised to the individual.
+          </h1>
+          <p className="text-dim text-lg lg:text-xl max-w-2xl mx-auto leading-relaxed">
+            CurateAI ingests thousands of articles every day, dedupes the
+            noise, and ships two products on top: a persona-aware newsletter
+            for every professional, and an SEO intelligence brief for every
+            enterprise — all backed by a transparent multi-agent pipeline.
+          </p>
+          <div className="flex items-center justify-center gap-3 flex-wrap pt-2">
+            <Link
+              href={primaryCta.href}
+              className="px-6 py-3 rounded-2xl bg-primary text-primary-foreground text-sm font-bold hover:bg-primary/90 transition inline-flex items-center gap-2 shadow-2xl shadow-primary/20"
+            >
+              {primaryCta.label} <ArrowRight className="w-4 h-4" />
+            </Link>
+            {status !== 'authenticated' && (
+              <Link
+                href="/login"
+                className="px-6 py-3 rounded-2xl border border-white/10 text-sm font-bold hover:border-white/20 transition"
+              >
+                I already have an account
+              </Link>
+            )}
+          </div>
+          <div className="flex items-center justify-center gap-6 text-xs text-dim pt-4 flex-wrap">
+            <span className="inline-flex items-center gap-2">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+              30+ feeds ingested daily
+            </span>
+            <span className="inline-flex items-center gap-2">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+              Persona-first caching · 98% LLM savings
+            </span>
+            <span className="inline-flex items-center gap-2">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+              MCP-ready for Claude Desktop
+            </span>
+          </div>
+        </div>
+      </section>
+
+      {/* Two product pillars */}
+      <section className="max-w-6xl mx-auto px-6 lg:px-10 py-20 grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="glass rounded-[2rem] p-10 border border-white/5 space-y-6 bg-gradient-to-br from-primary/5 to-transparent">
+          <div className="flex items-center gap-2 text-primary uppercase tracking-widest text-xs font-black">
+            <Mail className="w-4 h-4" /> For consumers
+          </div>
+          <h2 className="text-3xl font-extrabold leading-tight">
+            A newsletter that <em className="not-italic gradient-text">actually</em> knows your role.
+          </h2>
+          <p className="text-dim leading-relaxed">
+            Upload a LinkedIn PDF or hand-pick your interests. Every morning
+            we deliver 10 articles chosen by your persona plus the 20
+            biggest stories across 30+ feeds — all sourced, all linked,
+            every one a click away from the original publisher.
+          </p>
+          <ul className="space-y-2 text-sm text-dim">
+            <Bullet text="Persona-aware ranking — researchers get papers, investors get term sheets" />
+            <Bullet text="Feedback loops adjust interest weights as you like / skip" />
+            <Bullet text="Delivered to your inbox daily · preview + regenerate from the console" />
+          </ul>
+          <Link
+            href="/signup?role=USER"
+            className="inline-flex items-center gap-2 text-sm font-bold text-primary hover:underline"
+          >
+            Start as a reader <ArrowRight className="w-4 h-4" />
+          </Link>
+        </div>
+
+        <div className="glass rounded-[2rem] p-10 border border-white/5 space-y-6 bg-gradient-to-br from-secondary/5 to-transparent">
+          <div className="flex items-center gap-2 text-secondary uppercase tracking-widest text-xs font-black">
+            <Rocket className="w-4 h-4" /> For enterprises
+          </div>
+          <h2 className="text-3xl font-extrabold leading-tight">
+            SEO briefs you&apos;d actually ship.
+          </h2>
+          <p className="text-dim leading-relaxed">
+            We score surging entities against your company&apos;s authority
+            profile and emit a full content brief — angle, titles, structure,
+            keyword coverage, reference sources. Built for content teams who
+            want to move from &ldquo;watch trends&rdquo; to &ldquo;ship before the peak&rdquo;.
+          </p>
+          <ul className="space-y-2 text-sm text-dim">
+            <Bullet text="SpaCy NER tracks which brands + products are accelerating today" />
+            <Bullet text="4-signal opportunity scoring: Relevance · Velocity · Competition · Brand gap" />
+            <Bullet text="Markdown brief with inline citations, delivered in under a minute" />
+          </ul>
+          <Link
+            href="/signup?role=COMPANY"
+            className="inline-flex items-center gap-2 text-sm font-bold text-secondary hover:underline"
+          >
+            Start as a company <ArrowRight className="w-4 h-4" />
+          </Link>
+        </div>
+      </section>
+
+      {/* How it works */}
+      <section className="max-w-6xl mx-auto px-6 lg:px-10 py-20 space-y-10">
+        <div className="text-center space-y-3 max-w-2xl mx-auto">
+          <div className="text-primary uppercase tracking-widest text-xs font-black">
+            How it works
+          </div>
+          <h2 className="text-4xl font-extrabold leading-tight">
+            Four layers, one pipeline, one story per click.
+          </h2>
+          <p className="text-dim text-lg leading-relaxed">
+            Our Airflow stack ingests, dedupes, ranks and generates — LangGraph
+            agents pick up from there.
+          </p>
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          {/* TODO: wire these once /api/v1/admin/stats endpoint exists. */}
-          <StatCard
-            title="Daily Ingestion"
-            value="—"
-            change="0"
-            description="Articles processed today"
-            icon={Zap}
-          />
-          <StatCard
-            title="Avg. Relevancy"
-            value="—"
-            change="0"
-            description="Personalization score"
-            icon={CheckCircle2}
-          />
-          <StatCard
-            title="Agent Cycles"
-            value="—"
-            change="0"
-            description="LangGraph executions"
-            icon={Brain}
-          />
-          <StatCard
-            title="Drafts Ready"
-            value="—"
-            change="0"
-            description="Pending human review"
-            icon={Newspaper}
-            isWarning
-          />
+          <Step icon={Gauge} title="Ingest" copy="30+ RSS feeds, Reddit, Hacker News, ArXiv — 3,000+ articles a day." />
+          <Step icon={Brain} title="Dedupe + classify" copy="Sentence-Transformer clustering, hybrid keyword + LLM topic tagging." />
+          <Step icon={LineChart} title="Rank + score" copy="Trend detection, velocity, SEO opportunity — all persisted in Snowflake." />
+          <Step icon={Wand2} title="Generate + deliver" copy="Multi-agent writer/editor cycle · persona-cached summaries · MailerSend delivery." />
         </div>
+      </section>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          <div className="lg:col-span-2 space-y-6">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-bold flex items-center gap-2">
-                <Clock className="w-5 h-5 text-primary" />
-                Recent Ingestion Stream
-              </h2>
-              {loadingArticles && <Loader2 className="w-4 h-4 animate-spin text-dim" />}
-            </div>
-
-            <div className="space-y-4">
-              {!userId && (
-                <div className="glass rounded-2xl p-6 border border-dashed border-white/10 text-sm text-dim text-center">
-                  Enter a user id above to preview today&apos;s curated stream.
-                </div>
-              )}
-
-              {userId && articles.length === 0 && !loadingArticles && (
-                <div className="glass rounded-2xl p-6 border border-dashed border-white/10 text-sm text-dim text-center">
-                  No recommendations yet. Trigger an ingestion run, then revisit.
-                </div>
-              )}
-
-              {articles.map((article) => (
-                <ActivityItem
-                  key={article.cluster_id}
-                  title={article.title}
-                  source={(article.trend_status as string) ?? 'RECOMMENDED'}
-                  time={article.cluster_size ? `${article.cluster_size} sources` : 'fresh'}
-                  status={article.trend_status ?? 'QUALIFIED'}
-                  relevancy={Math.round((article.score ?? 0) * 100)}
-                />
-              ))}
-            </div>
-          </div>
-
-          <div className="space-y-6">
-            <h2 className="text-xl font-bold flex items-center gap-2">
-              <TrendingUp className="w-5 h-5 text-primary" />
-              Active Trends
-            </h2>
-            {/* TODO: wire to GET /api/v1/trend once a read endpoint exists. */}
-            <div className="glass rounded-2xl p-6 space-y-5 border border-white/5">
-              <TrendTag name="LLM Safety" count={42} velocity="High" />
-              <TrendTag name="HNSW Indexing" count={18} velocity="Stable" />
-              <TrendTag name="EU AI Policy" count={31} velocity="Surging" />
-              <TrendTag name="RAG Architectures" count={56} velocity="Peak" />
-              <div className="text-[10px] uppercase font-bold tracking-widest text-dim flex items-center gap-1 pt-2">
-                <Activity className="w-3 h-3" /> placeholder · live trend API pending
-              </div>
-            </div>
+      {/* CTA strip */}
+      <section className="max-w-5xl mx-auto px-6 lg:px-10 py-16">
+        <div className="glass rounded-[2.5rem] p-12 border border-white/10 text-center space-y-6 bg-gradient-to-br from-primary/10 via-transparent to-secondary/10">
+          <h2 className="text-4xl font-extrabold">Ready to try it on your own feed?</h2>
+          <p className="text-dim text-lg max-w-xl mx-auto">
+            Free to sign up. One minute to set up a persona. Your first
+            newsletter lands before you finish your coffee.
+          </p>
+          <div className="flex items-center justify-center gap-3 flex-wrap pt-2">
+            <Link
+              href={primaryCta.href}
+              className="px-6 py-3 rounded-2xl bg-primary text-primary-foreground text-sm font-bold hover:bg-primary/90 transition inline-flex items-center gap-2 shadow-2xl shadow-primary/20"
+            >
+              {primaryCta.label} <ArrowRight className="w-4 h-4" />
+            </Link>
+            {status !== 'authenticated' && (
+              <Link href="/login" className="text-sm font-bold text-dim hover:text-white transition">
+                Log in instead
+              </Link>
+            )}
           </div>
         </div>
+      </section>
+
+      <footer className="border-t border-white/5 mt-10">
+        <div className="max-w-6xl mx-auto px-6 lg:px-10 py-8 text-xs text-dim flex items-center justify-between flex-wrap gap-4">
+          <span>© {new Date().getFullYear()} CurateAI · built for the Big Data & Intelligent Analytics capstone.</span>
+          <div className="flex items-center gap-4">
+            <Link href="/login" className="hover:text-white transition">Log in</Link>
+            <Link href="/signup" className="hover:text-white transition">Sign up</Link>
+          </div>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+function Bullet({ text }: { text: string }) {
+  return (
+    <li className="flex items-start gap-2">
+      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+      <span>{text}</span>
+    </li>
+  );
+}
+
+function Step({
+  icon: Icon,
+  title,
+  copy,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  title: string;
+  copy: string;
+}) {
+  return (
+    <div className="glass rounded-3xl border border-white/5 p-6 space-y-3 hover:border-white/10 transition">
+      <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
+        <Icon className="w-5 h-5" />
       </div>
-    </PageWrapper>
+      <h3 className="font-bold">{title}</h3>
+      <p className="text-sm text-dim leading-relaxed">{copy}</p>
+    </div>
   );
 }
