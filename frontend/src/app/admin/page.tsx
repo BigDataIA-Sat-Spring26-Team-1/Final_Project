@@ -36,6 +36,9 @@ export default function AdminDashboard() {
     const controller = new AbortController();
     Promise.all([
       getHealth(controller.signal).catch((err) => {
+        // Suppress AbortError — fires on strict-mode double mount / navigation
+        // and makes the "Backend unreachable" banner flash for no real reason.
+        if ((err as Error).name === 'AbortError') return null;
         setHealthError(
           err instanceof ApiError
             ? `${err.status}: ${err.detail ?? err.message}`
@@ -46,6 +49,7 @@ export default function AdminDashboard() {
       listUsers(1, 0, controller.signal).catch(() => null),
       listCompanies(1, 0, controller.signal).catch(() => null),
     ]).then(([h, u, c]) => {
+      if (controller.signal.aborted) return;
       setHealth(h);
       if (u) setUserTotal(u.total);
       if (c) setCompanyTotal(c.total);

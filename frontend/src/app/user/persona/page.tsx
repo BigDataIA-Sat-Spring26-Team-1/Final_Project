@@ -8,15 +8,29 @@ import { CheckCircle2, Loader2, RefreshCw, Save, TriangleAlert } from 'lucide-re
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { PageWrapper } from '@/components/PageWrapper';
-import { Spinner } from '@/components/Spinner';
 import {
   ApiError,
   getPersona,
-  getTopTrends,
   updatePersonaCategories,
   type StoredPersona,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
+
+// Hardcoded taxonomy — mirrors the onboarding manual flow. The classification
+// DAG writes values into this same namespace, so everything the user picks here
+// lines up with how articles are tagged downstream.
+const CATEGORY_OPTIONS: string[] = [
+  'llms',
+  'ai_agents',
+  'computer_vision',
+  'security',
+  'hardware',
+  'software_engineering',
+  'ai_policy',
+  'general_ai',
+  'data_engineering',
+  'startups',
+];
 
 // Lightweight "remember last used id" — sessionStorage keeps it per-tab so
 // multiple demo windows don't collide. Swap for real auth when available.
@@ -28,10 +42,8 @@ export default function UserPersonaPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Category editor state. `categoryOptions` is the catalogue of cluster
-  // categories we surface as chips; `selectedCategories` is the currently
-  // staged set (seeded from the user's explicit weights and editable).
-  const [categoryOptions, setCategoryOptions] = useState<string[]>([]);
+  // `selectedCategories` is the currently staged set, seeded from the user's
+  // explicit weights and editable via the chip grid below.
   const [selectedCategories, setSelectedCategories] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
@@ -71,23 +83,6 @@ export default function UserPersonaPage() {
     loadPersona(userId, controller.signal);
     return () => controller.abort();
   }, [userId, loadPersona]);
-
-  // Pull the category catalogue from the trend snapshot. Each cluster carries
-  // a `categories` map; the union of keys across recent clusters is a good
-  // proxy for the taxonomy the classifier/DAG assigns during ingestion.
-  useEffect(() => {
-    const controller = new AbortController();
-    getTopTrends(50, undefined, controller.signal)
-      .then((r) => {
-        const bag = new Set<string>();
-        r.results.forEach((t) => {
-          Object.keys(t.categories || {}).forEach((k) => bag.add(k));
-        });
-        setCategoryOptions(Array.from(bag).sort());
-      })
-      .catch(() => setCategoryOptions([]));
-    return () => controller.abort();
-  }, []);
 
   // Seed the selection set whenever the persona loads, so checkboxes reflect
   // what's currently in Snowflake.
@@ -290,30 +285,26 @@ export default function UserPersonaPage() {
                 </p>
               </div>
 
-              {categoryOptions.length === 0 ? (
-                <Spinner label="Loading taxonomy" />
-              ) : (
-                <div className="flex flex-wrap gap-2">
-                  {categoryOptions.map((cat) => {
-                    const active = selectedCategories.has(cat);
-                    return (
-                      <button
-                        key={cat}
-                        type="button"
-                        onClick={() => toggleCategory(cat)}
-                        className={cn(
-                          'px-3 py-1.5 rounded-xl border text-xs font-bold transition-all uppercase',
-                          active
-                            ? 'bg-primary/10 text-primary border-primary/30'
-                            : 'bg-white/5 text-dim border-white/10 hover:border-white/20',
-                        )}
-                      >
-                        {humanize(cat)}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
+              <div className="flex flex-wrap gap-2">
+                {CATEGORY_OPTIONS.map((cat) => {
+                  const active = selectedCategories.has(cat);
+                  return (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => toggleCategory(cat)}
+                      className={cn(
+                        'px-3 py-1.5 rounded-xl border text-xs font-bold transition-all uppercase',
+                        active
+                          ? 'bg-primary/10 text-primary border-primary/30'
+                          : 'bg-white/5 text-dim border-white/10 hover:border-white/20',
+                      )}
+                    >
+                      {humanize(cat)}
+                    </button>
+                  );
+                })}
+              </div>
 
               <button
                 onClick={handleSaveCategories}
