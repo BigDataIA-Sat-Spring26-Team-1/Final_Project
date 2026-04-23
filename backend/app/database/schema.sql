@@ -162,3 +162,11 @@ ALTER TABLE newsletters ADD COLUMN IF NOT EXISTS sent_at TIMESTAMP_NTZ;
 ALTER TABLE newsletters ADD COLUMN IF NOT EXISTS delivery_status VARCHAR(50);
 ALTER TABLE newsletters ADD COLUMN IF NOT EXISTS delivery_message_id VARCHAR(255);
 ALTER TABLE newsletters ADD COLUMN IF NOT EXISTS delivery_recipient VARCHAR(255);
+
+-- Auth columns (2026-04-23). Each user row doubles as a login identity with
+-- a bcrypt password hash. `role` is one of 'ADMIN', 'USER', 'COMPANY'. For
+-- role='COMPANY' the user is also linked to a row in `companies` via
+-- `company_id` so the B2B console knows which tenant to render.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'USER';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS company_id VARCHAR(36);

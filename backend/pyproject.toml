@@ -48,6 +48,8 @@ dependencies = [
     # below because hatchling rejects PEP 508 direct URLs in editable builds.
     "en-core-web-sm",
     "mailersend>=2.0.3",
+    "pyjwt>=2.12.1",
+    "bcrypt>=5.0.0",
 ]
 
 [tool.uv.sources]

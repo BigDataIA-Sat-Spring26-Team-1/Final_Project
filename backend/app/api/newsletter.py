@@ -175,6 +175,20 @@ async def generate_b2c_newsletter(
     except Exception as e:
         logger.error("Newsletter persistence failed; returning unsaved content", error=str(e))
 
+    # Fire-and-forget email delivery on the fresh draft. `send_newsletter_email`
+    # is idempotent per (user_id, edition_date) so a later admin re-send is a
+    # no-op. Failures are logged but don't fail the generation — the user
+    # still gets the in-app preview.
+    try:
+        send_result = await send_newsletter_email(user_id, edition, db)
+        logger.info(
+            "Auto-email attempted after newsletter generation",
+            user_id=user_id,
+            status=send_result.get("status"),
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Auto-email after generation failed", error=str(e))
+
     return B2CNewsletterResponse(
         status=agent_status,
         html_content=content,
