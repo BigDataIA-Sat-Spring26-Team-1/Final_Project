@@ -59,9 +59,10 @@ A multi-tenant AI news intelligence platform: ingests ~3 000 technical articles 
                    │  scheduler + webserver +     │
                    │  Postgres meta-DB            │
                    │                              │
-                   │  7 DAGs (ingestion, dedup,   │
-                   │  trend, b2c, personalization,│
-                   │  b2b, behavioral_rollup)     │
+                   │  8 DAGs (ingestion, dedup,   │
+                   │  trend, qdrant_sync, b2c,    │
+                   │  personalization, b2b,        │
+                   │  behavioral_rollup)           │
                    └─────┬────────┬────────┬──────┘
                          ▼        ▼        ▼
                   Snowflake   Qdrant    External
@@ -83,7 +84,7 @@ A multi-tenant AI news intelligence platform: ingests ~3 000 technical articles 
 | `frontend/src/app/` | File-router pages: `/user/*`, `/company/*`, `/admin/*`, `/trending` |
 | `frontend/src/components/` | Reusable components (Navigation, MetricsPanel, AdminManagementPanel, …) |
 | `frontend/tests/` | Vitest + RTL (59 tests) |
-| `airflow/dags/` | 7 production DAGs |
+| `airflow/dags/` | 8 production DAGs |
 | `airflow/Dockerfile` | Airflow image (adds curl + extra Python deps) |
 | `airflow/README.md` | VM provisioning runbook |
 | `infrastructure/` | Cloud Build configs + docker-compose for the VM |
@@ -92,6 +93,15 @@ A multi-tenant AI news intelligence platform: ingests ~3 000 technical articles 
 ## Quickstart (local dev)
 
 Prereqs: Python 3.12, Node 22, Docker, [uv](https://docs.astral.sh/uv/), a `.env` at the repo root with Snowflake + OpenAI + Qdrant credentials.
+
+The fastest path is the automated setup script at the repo root:
+
+```bash
+chmod +x setup_dev.sh
+./setup_dev.sh   # starts Qdrant, installs Python deps, runs agent health checks
+```
+
+Or manually:
 
 ```bash
 # 1. Install + start Qdrant (local, for dev only — prod uses Qdrant Cloud)
@@ -109,6 +119,13 @@ npm install
 echo 'NEXT_PUBLIC_API_URL=http://localhost:8000' > .env.local
 npm run dev
 # -> http://localhost:3000
+```
+
+To seed Snowflake with mock user personas for local development:
+
+```bash
+cd backend
+uv run python scripts/seed_mock_users.py
 ```
 
 With just these two services the app is fully usable for browsing, persona editing, and reading newsletters. Airflow is only needed when you want to actually fire the ingestion / dedup / ranking pipelines — otherwise the read endpoints happily return whatever is already in Snowflake.
@@ -300,7 +317,8 @@ Cross-tenant divergence improved on *every* tested date. Biggest gain was the ha
 1. **Onboarding** (`/user/onboarding`) — upload one or more PDFs (LinkedIn export, resume). An LLM extracts a structured persona with a 10-category weight vector and one of six archetypes.
 2. **Persona inspector** (`/user/persona`) — see the explicit weights captured at onboarding alongside the behavioral weights that drift from feedback. Toggle "Update Interests" to edit bio + category picks in place.
 3. **My Feed** (`/user`) — personalized article feed driven by `SearchService.get_personalized_recommendations`. Each row has like / dislike / skip buttons; the signal flows through `/personas/feedback` and updates the persona in-place. First paint renders a pulsing skeleton, not the empty-state copy.
-4. **Newsletter** (`/newsletter`) — renders the actual email HTML the user would receive (via `GET /api/v1/newsletter/preview`) in a sandboxed iframe. A date picker flips between today's preview and the archive of past editions. One explicit **Send to My Inbox** button dispatches via MailerSend; it's idempotent per `(user_id, edition_date)` and disables once `sent_at` is stamped. There is no auto-email on generate — delivery is always a manual user or admin action.
+4. **Newsletter** (`/newsletter`) — renders the actual email HTML the user would receive (via `GET /api/v1/newsletter/preview`) in a sandboxed iframe. For today's edition the HTML is generated on-the-fly from fresh Qdrant data; past dates serve the stored copy. The B2C LangGraph runs in two modes: `fast` (skeleton render, lower latency) and `polished` (full multi-node generation with an editor review step). The traversal path is recorded in `newsletters.execution_path_taken` for debugging divergence between modes. A date picker flips between today's preview and the archive of past editions. One explicit **Send to My Inbox** button dispatches via MailerSend; it's idempotent per `(user_id, edition_date)` and disables once `sent_at` is stamped. There is no auto-email on generate — delivery is always a manual user or admin action.
+5. **Newsletter archive** (`/user/newsletters`) — paginated list of all past editions for the logged-in user with per-edition send status.
 
 ### B2B (corporate tenants)
 
@@ -312,8 +330,10 @@ Cross-tenant divergence improved on *every* tested date. Biggest gain was the ha
 
 1. **Admin Console** (`/admin`) — system health, high-velocity clusters, user/company totals, live Prometheus metrics, and the Admin Management panel (create user, create company, trigger pipeline).
 2. **Global Trends** (`/admin/trends`) — full ranked cluster table with data-reliability ratio.
-3. **Distribution Archive** (`/admin/newsletters`) — trigger ingestion + queue editorial reviews.
+3. **Distribution Archive** (`/admin/newsletters`) — cross-tenant newsletter archive with date filter (defaults to yesterday); supports batch **Send All** dispatch (concurrency capped at 5 to respect MailerSend quota).
 4. **Editorial Review** (`/admin/newsletters/review`) — HITL approval UI for drafts.
+5. **User Directory** (`/admin/users`) — list, create, and edit all B2C users; updates persona fields and category weights in-place.
+6. **Company Directory** (`/admin/companies`) — list, create, and edit all B2B tenant profiles; saving a profile triggers affinity re-extraction automatically.
 
 ### Data pipelines (Airflow)
 
@@ -326,8 +346,7 @@ Cross-tenant divergence improved on *every* tested date. Biggest gain was the ha
 | `b2c_personalization_dag` | 11:20 UTC daily | Fan-out — top-10 personalised clusters per user → `daily_selections` |
 | `b2c_newsletter_dag` | 11:50 UTC daily | Fan-out — one newsletter per user, persisted to `newsletters`. No auto-email; send is a manual user/admin action. |
 | `b2b_seo_dag` | manual (+ `{"company_id": "…"}` conf) | Fan-out — one structured brief per company, persisted to `content_briefs.structured_brief` |
-| `behavioral_refinement_dag` | @weekly | Decay + boost `user_personas.behavioral_category_weights` |
-| `behavioral_refinement_dag` | @weekly (paused in demo) | P4 rollup — decay + merge 7d of feedback events into `behavioral_category_weights` |
+| `behavioral_refinement_dag` | @weekly (paused in demo) | P4 rollup — decay + merge 7d of feedback events into `behavioral_category_weights`; boosts liked categories, decays skipped ones |
 
 All per-user / per-company DAGs accept `dag_run.conf={"user_id": "…"}` / `{"company_id": "…"}` for on-demand targeted runs.
 
@@ -385,6 +404,7 @@ Every PR runs GitHub Actions:
 | LangGraph node latency | `curateai_langgraph_node_latency_seconds` (B2B + B2C instrumented) |
 | DAG triggers | `curateai_dag_triggers_total{status}` + `curateai_dag_trigger_latency_seconds` |
 | Agent reliability | `curateai_newsletter_rejections_total` — editor rejecting drafts |
+| B2C execution path | `newsletters.execution_path_taken` column — records which LangGraph nodes fired per edition (fast vs polished divergence) |
 
 ## MCP integration
 
@@ -395,9 +415,10 @@ The backend mounts a FastMCP server at `/api/v1/mcp` (SSE transport) so Claude D
 | `health_check_mcp` | heartbeat |
 | `get_user_archetype(user_id)` | return the persona archetype |
 | `filter_articles(user_id, category?, limit)` | personalised recommendations with optional category filter |
-| `get_keyword_trends(limit, status?)` | ranked cluster snapshot |
-| `generate_user_newsletter(user_id, mode)` | run the B2C graph and return rendered HTML |
-| `generate_b2b_brief(company_id)` | run the B2B graph and return Markdown |
+| `get_keyword_trends(limit, status?, date?)` | ranked cluster snapshot with optional date and status filter |
+| `get_common_highlights(date?, limit)` | universal trending articles across all tenants for a given date |
+| `generate_user_newsletter(user_id, mode)` | run the B2C graph and return rendered HTML (`fast` or `polished` mode) |
+| `generate_b2b_brief(company_id, date?)` | run the B2B graph and return Markdown for a specific date |
 
 Claude Desktop config:
 
@@ -448,7 +469,7 @@ The backend's pipeline endpoints (`/ingestion/fetch-rss`, `/deduplication/proces
 - **No request-level authZ for MCP tools.** Any MCP client can invoke `generate_b2b_brief(company_id=…)` for any company id. Fine for a demo, not for production.
 - **Qdrant collection has no schema validation.** Payloads are trusted. A misbehaving backfill script could poison the collection with malformed payloads and the recommender would silently return garbage.
 - **Cost visibility is model-level, not prompt-level.** `curateai_llm_cost_total{model}` tracks spend per model but not per user / per archetype.
-- **Admin ingestion trigger rate-limit is coarse.** `2/minute` on `/ingestion/fetch-rss`, no per-user scoping. A determined tester can still flood the DAG queue.
+- **Rate limits are coarse and not per-user.** `/ingestion/fetch-rss` is capped at 2/min, `/personas/extract` at 5/min, `/personas/feedback` at 30/min, and `/b2b/report` at 10/min — all global, not scoped per user or API key. A determined tester can still flood the DAG queue.
 - **Newsletter archive doesn't paginate beyond the initial 10.** The frontend calls `?limit=10` with no offset control.
 - **No GitHub Actions-driven auto-deploy to prod.** Deploys are manual (`gcloud builds submit`) or workflow_dispatch-triggered — deliberate until we add staging environments.
 
