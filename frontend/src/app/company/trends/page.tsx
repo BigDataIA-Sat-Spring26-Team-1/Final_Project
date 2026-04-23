@@ -44,6 +44,7 @@ export default function KeywordVelocityPage() {
       setData(null);
       try {
         const res = await getKeywordVelocity(date || undefined, 30, controller.signal);
+        if (controller.signal.aborted) return;
         setData(res);
       } catch (err) {
         if ((err as Error).name === 'AbortError') return;
@@ -53,7 +54,13 @@ export default function KeywordVelocityPage() {
             : (err as Error).message,
         );
       } finally {
-        setLoading(false);
+        // Only flip loading off when this effect is still the active one.
+        // React 19 strict mode double-mounts each effect; without this guard
+        // the first (aborted) pass clears loading before the real fetch
+        // finishes, making the spinners disappear while the page is empty.
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
       }
     })();
     return () => controller.abort();

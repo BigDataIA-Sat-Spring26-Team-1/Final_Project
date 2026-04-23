@@ -62,6 +62,7 @@ export default function AdminTrendsPage() {
       setError(null);
       try {
         const r = await getTopTrends(30, undefined, controller.signal, date || undefined);
+        if (controller.signal.aborted) return;
         setTrends(r.results);
       } catch (err) {
         if ((err as Error).name === 'AbortError') return;
@@ -71,7 +72,7 @@ export default function AdminTrendsPage() {
             : (err as Error).message,
         );
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     })();
     return () => controller.abort();
