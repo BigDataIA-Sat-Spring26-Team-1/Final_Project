@@ -289,6 +289,21 @@ export interface KeywordVelocityResponse {
   results: KeywordVelocityRow[];
 }
 
+export function updatePersonaCategories(
+  userId: string,
+  weights: Record<string, number>,
+  signal?: AbortSignal,
+): Promise<{ user_id: string; explicit_category_weights: Record<string, number> }> {
+  return request(
+    `/api/v1/admin/personas/${encodeURIComponent(userId)}/categories`,
+    {
+      method: 'PUT',
+      json: weights,
+      signal,
+    },
+  );
+}
+
 export function getKeywordVelocity(
   date?: string,
   topN: number = 30,
