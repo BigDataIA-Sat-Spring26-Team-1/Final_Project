@@ -47,6 +47,7 @@ dependencies = [
     # up the wheel reproducibly. The URL is specified via `[tool.uv.sources]`
     # below because hatchling rejects PEP 508 direct URLs in editable builds.
     "en-core-web-sm",
+    "mailersend>=2.0.3",
 ]
 
 [tool.uv.sources]

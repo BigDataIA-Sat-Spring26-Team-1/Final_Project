@@ -12,12 +12,14 @@ from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from snowflake.connector import SnowflakeConnection
 
 from app.core.logging_conf import get_logger
 from app.core.schemas import B2CNewsletterRequest, B2CNewsletterResponse
 from app.db.snowflake import get_db_connection
 from app.services.b2c_agent import get_b2c_newsletter_graph
+from app.services.mailer import send_newsletter_email
 
 logger = get_logger("newsletter_api")
 router = APIRouter()
@@ -181,3 +183,55 @@ async def generate_b2c_newsletter(
         generated_at=generated_at or None,
         edition_date=edition,
     )
+
+
+# ---------------------------------------------------------------------------
+# Newsletter delivery (MailerSend)
+# ---------------------------------------------------------------------------
+
+class NewsletterSendRequest(BaseModel):
+    user_id: str = Field(..., description="Recipient's internal user id.")
+    edition_date: Optional[str] = Field(
+        default=None,
+        description="YYYY-MM-DD edition to send; defaults to today.",
+    )
+
+
+class NewsletterSendResponse(BaseModel):
+    status: str = Field(
+        ...,
+        description="SENT, ALREADY_SENT, FAILED, MAILER_DISABLED, NO_RECIPIENT, USER_NOT_FOUND",
+    )
+    user_id: str
+    edition_date: str
+    already_sent: bool = False
+    recipient: Optional[str] = None
+    message_id: Optional[str] = None
+    sent_at: Optional[str] = None
+    detail: Optional[str] = None
+    common_count: Optional[int] = None
+    personal_count: Optional[int] = None
+
+
+@router.post("/send", response_model=NewsletterSendResponse)
+async def send_single_newsletter(
+    request: NewsletterSendRequest,
+    db: SnowflakeConnection = Depends(get_db_connection),
+) -> NewsletterSendResponse:
+    """Dispatch one user's newsletter by email via MailerSend.
+
+    Idempotent per ``(user_id, edition_date)`` — we never send twice for the
+    same day. Errors come back as structured payloads (``FAILED``) rather than
+    raising, so the frontend can surface them cleanly.
+    """
+    try:
+        result = await send_newsletter_email(
+            user_id=request.user_id,
+            edition_date=request.edition_date,
+            db=db,
+        )
+    except Exception as exc:  # noqa: BLE001 — surface any unexpected issue
+        logger.error("Unexpected send failure", error=str(exc), exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return NewsletterSendResponse(**result)

@@ -88,6 +88,17 @@ class Settings(BaseSettings):
     airflow_password: str = "admin"
     airflow_request_timeout_seconds: float = 10.0
 
+    # ---- MailerSend (newsletter delivery) --------------------------------------
+    # Leave the API key empty in envs where sending isn't wired up; the endpoint
+    # returns 503 in that case instead of blowing up. FROM_EMAIL / FROM_NAME are
+    # what readers see in their inbox; TEST_RECIPIENT is a safety rail — when
+    # set, every send is redirected to that address regardless of the stored
+    # user email. Leave TEST_RECIPIENT empty in production.
+    mailersend_api_key: str = ""
+    mailersend_from_email: str = "info@trial-vywj2lpk65el7oqz.mlsender.net"
+    mailersend_from_name: str = "CurateAI Newsletter"
+    mailersend_test_recipient: str = ""
+
     model_config = SettingsConfigDict(
         env_file=_REPO_ROOT_ENV,
         env_file_encoding="utf-8",
