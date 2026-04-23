@@ -133,18 +133,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Probe /personas/{id} when a USER authenticates so we know whether
   // to force them through onboarding. Non-USER roles don't have a
-  // persona concept.
+  // persona concept. State mutations live inside the async callback
+  // (not the effect body) so the react-hooks/set-state-in-effect rule
+  // stays happy.
   useEffect(() => {
-    if (status !== 'authenticated' || !user) {
-      setHasPersona(null);
-      return;
-    }
-    if (user.role !== 'USER') {
-      setHasPersona(null);
-      return;
-    }
     const controller = new AbortController();
     (async () => {
+      if (status !== 'authenticated' || !user || user.role !== 'USER') {
+        setHasPersona(null);
+        return;
+      }
       try {
         await getPersona(user.id, controller.signal);
         if (!controller.signal.aborted) setHasPersona(true);
