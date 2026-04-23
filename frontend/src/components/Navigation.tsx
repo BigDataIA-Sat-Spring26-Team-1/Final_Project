@@ -8,7 +8,6 @@ import {
   Settings,
   User,
   TrendingUp,
-  Briefcase,
   Users,
   Building2,
   ShieldCheck,
@@ -35,7 +34,6 @@ const NAV_CONFIG = {
     { name: 'My Persona', href: '/user/persona', icon: Settings },
   ],
   COMPANY: [
-    { name: 'B2B Insights', href: '/company', icon: Briefcase },
     { name: 'Strategic Drafts', href: '/company/drafts', icon: LayoutDashboard },
     { name: 'Keyword Velocity', href: '/company/trends', icon: TrendingUp },
   ]
