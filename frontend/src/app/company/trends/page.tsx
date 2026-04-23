@@ -1,43 +1,38 @@
 'use client';
 
-// Keyword Velocity table for the enterprise console. Reads ranked clusters
-// from /api/v1/trend/top, derives "company status" (LEADER / EMERGING /
-// OPPORTUNITY / MATURE) from cluster_size + final_trend_score, and supports a
-// client-side text filter. The "Generate Strategy Brief" shortcut jumps to
-// /company/drafts where the actual B2B agent runs.
+// Keyword Velocity dashboard for the enterprise console. Powered by the
+// SpaCy NER endpoint (/api/v1/b2b/keyword-velocity) — the response is a list
+// of entities (companies, products, people) with mention counts and a
+// SURGING / STABLE / DECLINING tag. Matches the S5 prototype layout:
+//
+//   ENTITY | CURR 24h | PREV 24h | TOTAL | STATUS | VELOCITY
+//
+// The date picker anchors the "current" window; max is yesterday because the
+// ingestion DAG runs daily and today's partial window is noisy.
 
-import {
-  ArrowUpRight,
-  Calendar,
-  Loader2,
-  Search,
-  TriangleAlert,
-} from 'lucide-react';
-import Link from 'next/link';
+import { ArrowDownRight, ArrowUpRight, Calendar, Loader2, Search, TriangleAlert } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
 import { PageWrapper } from '@/components/PageWrapper';
+import { Spinner } from '@/components/Spinner';
 import {
   ApiError,
-  getTopTrends,
-  type TrendCluster,
+  getKeywordVelocity,
+  type KeywordVelocityResponse,
+  type KeywordVelocityRow,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
-type CompanyStatus = 'LEADER' | 'EMERGING' | 'OPPORTUNITY' | 'MATURE';
+function yesterdayIso(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
 
-type Row = TrendCluster & {
-  company_status: CompanyStatus;
-  authority: number;
-  deltaPct: number;
-};
-
-const TODAY = new Date().toISOString().slice(0, 10);
-
-export default function CompanyTrendsPage() {
+export default function KeywordVelocityPage() {
+  const [date, setDate] = useState<string>(yesterdayIso());
   const [filter, setFilter] = useState('');
-  const [selectedDate, setSelectedDate] = useState<string>('');
-  const [trends, setTrends] = useState<TrendCluster[]>([]);
+  const [data, setData] = useState<KeywordVelocityResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -46,14 +41,10 @@ export default function CompanyTrendsPage() {
     (async () => {
       setLoading(true);
       setError(null);
+      setData(null);
       try {
-        const data = await getTopTrends(
-          30,
-          undefined,
-          controller.signal,
-          selectedDate || undefined,
-        );
-        setTrends(data.results);
+        const res = await getKeywordVelocity(date || undefined, 30, controller.signal);
+        setData(res);
       } catch (err) {
         if ((err as Error).name === 'AbortError') return;
         setError(
@@ -66,38 +57,20 @@ export default function CompanyTrendsPage() {
       }
     })();
     return () => controller.abort();
-  }, [selectedDate]);
-
-  // Map the raw cluster shape into the table's display row shape. Values are
-  // heuristics — they're consistent across renders so the UI stays stable.
-  const rows: Row[] = useMemo(
-    () =>
-      trends.map((t) => {
-        const authority = Math.min(0.99, t.final_trend_score / 200);
-        const status: CompanyStatus =
-          t.cluster_size >= 5 && t.final_trend_score >= 100
-            ? 'LEADER'
-            : t.cluster_size <= 2 && t.final_trend_score >= 40
-            ? 'OPPORTUNITY'
-            : t.cluster_size >= 5
-            ? 'MATURE'
-            : 'EMERGING';
-        // Momentum = final_trend_score normalised; let it go negative if the
-        // cluster is large and stale relative to its peers.
-        const deltaPct = Math.round(t.final_trend_score - t.cluster_size * 5);
-        return { ...t, company_status: status, authority, deltaPct };
-      }),
-    [trends],
-  );
+  }, [date]);
 
   const filtered = useMemo(() => {
-    if (!filter.trim()) return rows;
+    if (!data) return [];
+    if (!filter.trim()) return data.results;
     const q = filter.trim().toLowerCase();
-    return rows.filter((r) => r.title.toLowerCase().includes(q));
-  }, [rows, filter]);
+    return data.results.filter((r) => r.entity.toLowerCase().includes(q));
+  }, [data, filter]);
 
-  const dominant = rows.find((r) => r.company_status === 'LEADER') ?? rows[0];
-  const blueOcean = rows.find((r) => r.company_status === 'OPPORTUNITY');
+  const surgingCount = useMemo(
+    () => (data?.results ?? []).filter((r) => r.status === 'SURGING').length,
+    [data],
+  );
+  const topEntity = data?.results?.[0];
 
   return (
     <PageWrapper>
@@ -106,7 +79,7 @@ export default function CompanyTrendsPage() {
           <div className="space-y-2">
             <h1 className="text-4xl font-bold tracking-tight">Keyword Velocity</h1>
             <p className="text-dim text-lg">
-              Authority-weighted trend signals across ranked clusters.
+              SpaCy NER-discovered entities with 24-hour mention velocity.
             </p>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
@@ -114,20 +87,11 @@ export default function CompanyTrendsPage() {
               <Calendar className="w-4 h-4 text-dim mr-2" />
               <input
                 type="date"
-                value={selectedDate}
-                max={TODAY}
-                onChange={(e) => setSelectedDate(e.target.value)}
+                value={date}
+                max={yesterdayIso()}
+                onChange={(e) => setDate(e.target.value)}
                 className="bg-transparent border-none outline-none text-sm placeholder:text-dim"
               />
-              {selectedDate && (
-                <button
-                  type="button"
-                  onClick={() => setSelectedDate('')}
-                  className="ml-2 text-[10px] uppercase tracking-widest text-primary hover:underline"
-                >
-                  Clear
-                </button>
-              )}
             </div>
             <div className="flex items-center glass rounded-xl px-4 py-2 border border-white/5 focus-within:border-primary/40">
               <Search className="w-4 h-4 text-dim mr-2" />
@@ -135,7 +99,7 @@ export default function CompanyTrendsPage() {
                 type="text"
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
-                placeholder="Filter company keywords..."
+                placeholder="Filter entities..."
                 className="bg-transparent border-none outline-none text-sm w-48 placeholder:text-dim"
               />
             </div>
@@ -149,45 +113,39 @@ export default function CompanyTrendsPage() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-          <div className="glass rounded-3xl p-8 border border-white/5 space-y-4">
-            <h3 className="text-xs font-black uppercase tracking-widest text-secondary">
-              Dominant Authority Cluster
-            </h3>
-            <h4 className="text-3xl font-black">
-              {dominant ? truncate(dominant.title, 48) : '—'}
-            </h4>
-            <p className="text-dim">
-              {dominant
-                ? `Alignment score ${dominant.authority.toFixed(2)} across ${dominant.cluster_size} independent sources.`
-                : 'No ranked clusters yet.'}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="glass rounded-3xl p-8 border border-white/5 space-y-2">
+            <p className="text-[10px] font-black text-dim uppercase tracking-widest">
+              Current Window
             </p>
-            {dominant && (
-              <div className="flex items-center gap-2 text-emerald-400 text-sm font-bold">
-                <ArrowUpRight className="w-4 h-4" />
-                {dominant.trend_status ?? 'REGULAR'} · {dominant.deltaPct >= 0 ? '+' : ''}
-                {dominant.deltaPct} momentum
-              </div>
-            )}
+            <h3 className="text-xl font-black font-mono">
+              {loading ? <Spinner size="sm" /> : data?.target_date ?? '—'}
+            </h3>
+            <p className="text-xs text-dim">
+              compared against {data?.previous_date ?? 'the prior day'}
+            </p>
           </div>
-          <div className="glass rounded-3xl p-8 border border-white/5 space-y-4 bg-gradient-to-br from-primary/5 to-transparent">
-            <h3 className="text-xs font-black uppercase tracking-widest text-primary">
-              Blue Ocean Opportunity
-            </h3>
-            <h4 className="text-3xl font-black">
-              {blueOcean ? truncate(blueOcean.title, 48) : 'No candidate yet'}
-            </h4>
-            <p className="text-dim">
-              {blueOcean
-                ? 'High search velocity with low competitor authority overlap detected.'
-                : 'Re-rank trends to surface under-covered clusters.'}
+          <div className="glass rounded-3xl p-8 border border-white/5 space-y-2 bg-gradient-to-br from-emerald-500/5 to-transparent">
+            <p className="text-[10px] font-black text-emerald-400 uppercase tracking-widest">
+              Surging Entities
             </p>
-            <Link
-              href="/company/drafts"
-              className="text-xs font-black text-primary hover:underline uppercase tracking-widest"
-            >
-              Generate Strategy Brief
-            </Link>
+            <h3 className="text-3xl font-black">
+              {loading ? <Spinner size="sm" /> : surgingCount}
+            </h3>
+            <p className="text-xs text-dim">velocity &gt; +50% vs prior window</p>
+          </div>
+          <div className="glass rounded-3xl p-8 border border-white/5 space-y-2 bg-gradient-to-br from-primary/5 to-transparent">
+            <p className="text-[10px] font-black text-primary uppercase tracking-widest">
+              Top Entity
+            </p>
+            <h3 className="text-xl font-black truncate">
+              {loading ? <Spinner size="sm" /> : topEntity?.entity ?? '—'}
+            </h3>
+            <p className="text-xs text-dim">
+              {topEntity
+                ? `${topEntity.total_mentions} mentions · ${topEntity.status}`
+                : 'No signals yet'}
+            </p>
           </div>
         </div>
 
@@ -196,32 +154,31 @@ export default function CompanyTrendsPage() {
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-white/5 text-[10px] font-black uppercase tracking-widest text-dim border-b border-white/5">
-                  <th className="px-8 py-5">Strategic Keyword</th>
-                  <th className="px-8 py-5">Company Status</th>
-                  <th className="px-8 py-5 text-center">Market Vol</th>
-                  <th className="px-8 py-5 text-center">Our Authority</th>
-                  <th className="px-8 py-5 text-right">Momentum</th>
+                  <th className="px-8 py-5">Entity</th>
+                  <th className="px-8 py-5 text-center">Current 24h</th>
+                  <th className="px-8 py-5 text-center">Previous 24h</th>
+                  <th className="px-8 py-5 text-center">Total Mentions</th>
+                  <th className="px-8 py-5 text-right">Velocity</th>
+                  <th className="px-8 py-5">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
-                {loading && filtered.length === 0 && (
+                {loading && (
                   <tr>
-                    <td colSpan={5} className="px-8 py-10 text-center text-dim">
-                      <Loader2 className="w-4 h-4 animate-spin inline mr-2" />
-                      Loading trend snapshot...
+                    <td colSpan={6} className="px-8 py-10 text-center">
+                      <Loader2 className="w-5 h-5 animate-spin inline text-dim" />
+                      <span className="ml-3 text-dim text-sm">Running SpaCy NER…</span>
                     </td>
                   </tr>
                 )}
                 {!loading && filtered.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-8 py-10 text-center text-dim italic">
-                      No matching clusters. Clear the filter or run an ingestion + rank.
+                    <td colSpan={6} className="px-8 py-10 text-center text-dim italic">
+                      No entities for the selected day — try a different date or widen the filter.
                     </td>
                   </tr>
                 )}
-                {filtered.map((row) => (
-                  <CompanyTrendRow key={row.cluster_id} row={row} />
-                ))}
+                {!loading && filtered.map((row) => <VelocityRow key={row.entity} row={row} />)}
               </tbody>
             </table>
           </div>
@@ -231,57 +188,43 @@ export default function CompanyTrendsPage() {
   );
 }
 
-function CompanyTrendRow({ row }: { row: Row }) {
-  const isNegative = row.deltaPct < 0;
-  const deltaLabel = `${row.deltaPct >= 0 ? '+' : ''}${row.deltaPct}`;
+function VelocityRow({ row }: { row: KeywordVelocityRow }) {
+  const positive = row.velocity_pct >= 0;
+  const statusClass =
+    row.status === 'SURGING'
+      ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
+      : row.status === 'DECLINING'
+      ? 'bg-red-500/10 text-red-500 border-red-500/20'
+      : 'bg-white/5 text-dim border-white/10';
+
   return (
-    <tr className="hover:bg-white/[0.02] transition-colors group">
-      <td className="px-8 py-6 font-bold text-white group-hover:text-primary transition-colors">
-        {truncate(row.title, 48)}
+    <tr className="hover:bg-white/[0.02] transition-colors">
+      <td className="px-8 py-5 font-bold text-white">{row.entity}</td>
+      <td className="px-8 py-5 text-center font-mono">{row.current}</td>
+      <td className="px-8 py-5 text-center font-mono text-dim">{row.previous}</td>
+      <td className="px-8 py-5 text-center font-bold">{row.total_mentions}</td>
+      <td
+        className={cn(
+          'px-8 py-5 text-right font-black',
+          positive ? 'text-emerald-500' : 'text-red-500',
+        )}
+      >
+        <span className="inline-flex items-center gap-1">
+          {positive ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownRight className="w-4 h-4" />}
+          {positive ? '+' : ''}
+          {row.velocity_pct.toFixed(1)}%
+        </span>
       </td>
-      <td className="px-8 py-6">
+      <td className="px-8 py-5">
         <span
           className={cn(
             'px-3 py-1 rounded-full text-[10px] font-black tracking-widest border uppercase',
-            row.company_status === 'OPPORTUNITY'
-              ? 'bg-primary/10 text-primary border-primary/20'
-              : row.company_status === 'LEADER'
-              ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
-              : 'bg-white/5 text-dim border-white/10',
+            statusClass,
           )}
         >
-          {row.company_status}
+          {row.status}
         </span>
-      </td>
-      <td className="px-8 py-6 text-center text-dim font-medium">
-        {formatCount(row.cluster_size * 100 + Math.round(row.social_popularity_score || 0))}
-      </td>
-      <td className="px-8 py-6 text-center">
-        <div className="flex flex-col items-center">
-          <span className="text-xs font-bold text-white leading-none">{row.authority.toFixed(2)}</span>
-          <div className="w-12 h-1 bg-white/5 rounded-full mt-1">
-            <div className="h-full bg-secondary rounded-full" style={{ width: `${row.authority * 100}%` }} />
-          </div>
-        </div>
-      </td>
-      <td
-        className={cn(
-          'px-8 py-6 text-right font-black',
-          isNegative ? 'text-red-500' : 'text-emerald-500',
-        )}
-      >
-        {deltaLabel} {isNegative ? '↓' : '↑'}
       </td>
     </tr>
   );
-}
-
-function truncate(s: string, n: number): string {
-  return s.length > n ? s.slice(0, n - 1) + '…' : s;
-}
-
-function formatCount(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}m`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return n.toString();
 }

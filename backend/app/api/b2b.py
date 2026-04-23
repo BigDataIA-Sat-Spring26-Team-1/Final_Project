@@ -10,7 +10,7 @@ import uuid
 from datetime import date
 from typing import Any, Dict, Optional, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from snowflake.connector import SnowflakeConnection
 
 from app.core.limiter import limiter
@@ -18,6 +18,7 @@ from app.core.logging_conf import get_logger
 from app.core.schemas import B2BReportRequest, B2BReportResponse
 from app.db.snowflake import get_db_connection
 from app.services.b2b_agent import get_b2b_report_graph
+from app.services.keyword_velocity import compute_keyword_velocity
 
 logger = get_logger("app.api.b2b")
 router = APIRouter()
@@ -163,3 +164,31 @@ async def generate_b2b_report(
         generated_at=generated_at or None,
         brief_date=today,
     )
+
+
+@router.get("/keyword-velocity")
+async def keyword_velocity(
+    date: Optional[str] = Query(
+        None,
+        description="YYYY-MM-DD anchor for the current window (defaults to today).",
+    ),
+    top_n: int = Query(30, ge=1, le=100),
+    min_mentions: int = Query(3, ge=1, le=50),
+) -> Dict[str, Any]:
+    """SpaCy NER-driven velocity report.
+
+    Discovers ORG / PRODUCT / WORK_OF_ART / PERSON entities across the last
+    24h of ingested titles, compares per-entity mention counts to the prior
+    day, and tags each as SURGING / STABLE / DECLINING. Response mirrors the
+    shape produced by ``Temp/SEO_Prototype/s5_keyword_velocity_test.py``.
+    """
+    logger.info("keyword_velocity requested", date=date, top_n=top_n)
+    try:
+        return compute_keyword_velocity(target_date=date, top_n=top_n, min_mentions=min_mentions)
+    except RuntimeError as exc:
+        # Missing spaCy model — surface as a clean 503 so the UI can render a
+        # helpful "install the model" banner rather than a 500.
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        logger.error("keyword_velocity failed", error=str(exc), exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
