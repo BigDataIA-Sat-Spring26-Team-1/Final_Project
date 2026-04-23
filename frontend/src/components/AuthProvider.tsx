@@ -24,6 +24,7 @@ import {
   clearAuthToken,
   getAuthToken,
   getCurrentUser,
+  getPersona,
   loginAccount,
   setAuthToken,
   signupAccount,
@@ -39,10 +40,19 @@ type AuthStatus = 'loading' | 'authenticated' | 'anonymous';
 interface AuthContextValue {
   status: AuthStatus;
   user: AuthUser | null;
+  /**
+   * True once `/personas/{user_id}` has resolved for a USER role.
+   * `null` while the probe is in flight or role isn't USER. Used by the
+   * onboarding-flow route guard below: USER with `hasPersona === false`
+   * is forced through `/user/onboarding` on every navigation.
+   */
+  hasPersona: boolean | null;
   login: (email: string, password: string) => Promise<AuthUser>;
   signup: (payload: SignupPayload) => Promise<AuthUser>;
   logout: () => void;
   refresh: () => Promise<void>;
+  /** Called by the onboarding page after persona is successfully persisted. */
+  markPersonaPresent: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -50,6 +60,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [status, setStatus] = useState<AuthStatus>('loading');
+  const [hasPersona, setHasPersona] = useState<boolean | null>(null);
   const router = useRouter();
   const pathname = usePathname();
 
@@ -120,8 +131,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // Route guard: anonymous visitors to protected pages bounce to /login.
-  // Authenticated visitors to /login or /signup bounce back to their home.
+  // Probe /personas/{id} when a USER authenticates so we know whether
+  // to force them through onboarding. Non-USER roles don't have a
+  // persona concept.
+  useEffect(() => {
+    if (status !== 'authenticated' || !user) {
+      setHasPersona(null);
+      return;
+    }
+    if (user.role !== 'USER') {
+      setHasPersona(null);
+      return;
+    }
+    const controller = new AbortController();
+    (async () => {
+      try {
+        await getPersona(user.id, controller.signal);
+        if (!controller.signal.aborted) setHasPersona(true);
+      } catch (err) {
+        if ((err as Error).name === 'AbortError') return;
+        if (err instanceof ApiError && err.status === 404) {
+          setHasPersona(false);
+        } else {
+          // Treat transient errors as "unknown" so we don't trap the user
+          // on /user/onboarding if the persona API is momentarily down.
+          setHasPersona(null);
+        }
+      }
+    })();
+    return () => controller.abort();
+  }, [status, user]);
+
+  const markPersonaPresent = useCallback(() => {
+    setHasPersona(true);
+  }, []);
+
+  // Route guard:
+  //   - anonymous → /login
+  //   - authenticated USER without persona → /user/onboarding (forced)
+  //   - authenticated on /login or /signup → role home
   useEffect(() => {
     if (status === 'loading') return;
     const isPublic = PUBLIC_PATHS.has(pathname);
@@ -131,12 +179,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     if (status === 'authenticated' && (pathname === '/login' || pathname === '/signup')) {
       router.replace(homeForRole(user?.role));
+      return;
     }
-  }, [pathname, router, status, user?.role]);
+    // Persona gate for USER role. Keep the user pinned to /user/onboarding
+    // until their persona row exists — the rest of the app (feed,
+    // newsletter, persona editor) assumes a persona is present.
+    if (
+      status === 'authenticated'
+      && user?.role === 'USER'
+      && hasPersona === false
+      && pathname !== '/user/onboarding'
+    ) {
+      router.replace('/user/onboarding');
+    }
+  }, [pathname, router, status, user?.role, hasPersona]);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ status, user, login, signup, logout, refresh }),
-    [status, user, login, signup, logout, refresh],
+    () => ({ status, user, hasPersona, login, signup, logout, refresh, markPersonaPresent }),
+    [status, user, hasPersona, login, signup, logout, refresh, markPersonaPresent],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

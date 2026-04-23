@@ -179,3 +179,10 @@ ALTER TABLE companies ADD COLUMN IF NOT EXISTS key_products TEXT;
 ALTER TABLE companies ADD COLUMN IF NOT EXISTS content_pillars TEXT;
 ALTER TABLE companies ADD COLUMN IF NOT EXISTS competitors TEXT;
 ALTER TABLE companies ADD COLUMN IF NOT EXISTS tone_of_voice VARCHAR(50);
+
+-- Content-affinity weight vector (2026-04-23 late). 10-dim distribution
+-- over the production taxonomy (mirror of user CategoryWeights). Extracted
+-- by the LLM on profile create/update and used as a hard constraint in
+-- the B2B agent's Strategic Brief prompt. Nullable; when null the agent
+-- falls back to the profile-text-only prompt.
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS content_affinity_weights VARIANT;

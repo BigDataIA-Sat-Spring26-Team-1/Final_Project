@@ -16,8 +16,10 @@ import {
   TriangleAlert,
 } from 'lucide-react';
 import NextLink from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
+import { useAuth } from '@/components/AuthProvider';
 import { PageWrapper } from '@/components/PageWrapper';
 import { Spinner } from '@/components/Spinner';
 import {
@@ -55,9 +57,18 @@ const MAX_FILE_BYTES = 10 * 1024 * 1024;
 
 export default function UserOnboarding() {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const router = useRouter();
+  const { user, markPersonaPresent } = useAuth();
 
   const [mode, setMode] = useState<OnboardingMode>('linkedin');
-  const [userId, setUserId] = useState('');
+  // Default the user id to the signed-in user — onboarding is now the
+  // forced landing page for USERs without a persona, so the target is
+  // always themselves. We keep the raw input visible for admin-style
+  // override but hydrate it from auth on mount.
+  const [userId, setUserId] = useState(user?.id ?? '');
+  useEffect(() => {
+    if (user?.id) setUserId(user.id);
+  }, [user?.id]);
   const [files, setFiles] = useState<File[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [result, setResult] = useState<BatchPersonaResponse | null>(null);
@@ -127,6 +138,13 @@ export default function UserOnboarding() {
         explicit_category_weights: manualWeights,
       });
       setManualSuccess(`Persona ${out.persona_id.slice(0, 8)}… saved for ${out.user_id}.`);
+      // Persona is now on file — flip the AuthProvider gate and route
+      // this user into the real app. Skip the redirect if an admin is
+      // onboarding a *different* user id than their own.
+      if (user?.id && userId.trim() === user.id) {
+        markPersonaPresent();
+        setTimeout(() => router.replace('/user'), 800);
+      }
     } catch (err) {
       setError(
         err instanceof ApiError
@@ -175,6 +193,13 @@ export default function UserOnboarding() {
     try {
       const response = await extractPersonas(userId.trim(), files);
       setResult(response);
+      // Same gate-flip as the manual path: persona row exists, let the
+      // user through to the real app.
+      const succeeded = response.results.some((r) => r.is_success && r.data);
+      if (succeeded && user?.id && userId.trim() === user.id) {
+        markPersonaPresent();
+        setTimeout(() => router.replace('/user'), 1200);
+      }
     } catch (err) {
       setError(
         err instanceof ApiError

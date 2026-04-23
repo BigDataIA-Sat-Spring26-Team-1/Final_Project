@@ -202,7 +202,96 @@ Full runbook including GCE provisioning, firewall, budget alerting, and Cloud Ru
 | Qdrant | Qdrant Cloud | collection `articles`, 1536-dim cosine |
 | OpenAI | managed | `text-embedding-3-small`, `gpt-4o-mini` |
 
-Secrets are stored in GCP Secret Manager (`SECRET_KEY`, `SNOWFLAKE_PASSWORD`, `OPENAI_API_KEY`, `QDRANT_API_KEY`, `AIRFLOW_PASSWORD`) and bound to the Cloud Run service account at deploy time.
+Secrets are stored in GCP Secret Manager (`SECRET_KEY`, `SNOWFLAKE_PASSWORD`, `OPENAI_API_KEY`, `QDRANT_API_KEY`, `MAILERSEND_API_KEY`, `AIRFLOW_PASSWORD`) and bound to the Cloud Run service account at deploy time.
+
+## Personalization — the MVP
+
+Every tenant surface in CurateAI (consumer newsletter, enterprise Strategic Brief) reaches the same embedding store (Qdrant `articles`, 1,536-dim, cosine), but *which* articles each tenant sees and *how* those articles are turned into delivered content is driven by two parallel personalization stacks that share a single 10-dimensional content taxonomy:
+
+```
+llms · ai_agents · computer_vision · security · hardware ·
+software_engineering · ai_policy · general_ai · data_engineering · startups
+```
+
+Every user persona and every company profile is mapped onto this same 10-slot probability distribution. That shared shape is what lets the retrieval layer stay untouched while the downstream generation layer knows exactly *which vocabulary* to pull from for a given tenant.
+
+### B2C newsletter — user-persona driven
+
+**Inputs maintained per user** (`user_personas` in Snowflake):
+- `explicit_category_weights` — captured at onboarding from a LinkedIn PDF (LLM extractor) or a manual chip-picker. This is a hard distribution over the 10 categories.
+- `behavioral_category_weights` — drifts with every like / dislike / skip the user fires on their feed. Starts at the explicit vector and diffuses from there.
+- `job_title`, `seniority`, `persona_archetype`, `bio_summary` — free-text persona fields that the extractor fills in once.
+
+**Blend applied before retrieval** (`SearchService.get_personalized_recommendations`):
+```
+weights[c] = explicit[c] × 0.80 + behavioral[c] × 0.20     # P4 blend
+weights    = { c: w for c, w in weights if w >= 0.05 }     # noise prune
+```
+The blended weights are concatenated with the free-text persona fields to build a semantic query. That query is embedded with `text-embedding-3-small` and issued against Qdrant; results are then date-scoped by joining `articles_raw.published_at` within a 2-day window around the edition date.
+
+**Why it differentiates:** a Security Engineer and a Data Engineer produce sharply orthogonal query vectors — one leans on `security + ai_policy + software_engineering` plus the phrase "Senior Security Engineer", the other leans on `data_engineering + llms + general_ai` plus "Staff Data Engineer". The Qdrant returns don't overlap much, and because the B2C agent *renders the retrieved article list directly* into the newsletter, those differences are visible to the reader without the LLM needing to interpret anything.
+
+**Behavioral loop closes the drift:** every like on a `llms`-heavy article nudges `behavioral[llms]` up; the next day's blended query has slightly more mass on LLMs. Nothing prescriptive — the system just tracks where the user's attention goes.
+
+### B2B Strategic Brief — company-affinity driven (the new one)
+
+The symmetric problem: different company tenants (a dev-tools vendor, a fintech-fraud vendor, an investment-research firm) should get visibly different daily briefs. The original implementation dumped every profile free-text field into one long semantic query, and the downstream LLM collapsed the distinct retrieval into tenant-voice boilerplate — briefs read alike across tenants even though the retrieval ranked different articles.
+
+**The fix: give companies the same 10-dim taxonomy vector that users have, and inject it into the generation prompt as a hard constraint.**
+
+**Inputs maintained per tenant** (`companies` in Snowflake):
+- Rich text profile — `name`, `industry`, `description`, `target_audience`, `key_products`, `content_pillars`, `competitors`, `tone_of_voice`. All ten fields are mandatory (422 on missing).
+- **`content_affinity_weights VARIANT`** (new) — the 10-dim distribution over the same taxonomy used by personas, extracted by an LLM call every time the profile is created or updated. Populated by `app.services.company_affinity.extract_company_affinity`.
+
+**How the vector shapes the brief** (`b2b_agent.build_strategic_brief`):
+
+```
+DOMINANT CATEGORIES = top-3 categories with weight ≥ 0.10
+ZERO-WEIGHT CATEGORIES = all categories with weight < 0.05
+
+Prompt hard constraints:
+  1. Every editorial_title MUST reference at least one DOMINANT category
+     using the tenant's own vocabulary (not the raw taxonomy token).
+  2. ≥3 of primary_keywords MUST be phrases a practitioner in the DOMINANT
+     category would actually search for.
+  3. DO NOT reference ZERO-WEIGHT categories anywhere in the output.
+
+Temperature bumped from 0.0 → 0.4 so day-to-day briefs don't collapse
+into identical prose when the retrieved anchor changes.
+```
+
+The top retrieved article for that specific `brief_date` is marked as a mandatory **primary anchor** in the prompt — `headline` and `blue_ocean_angle` must be framed around that specific development. Supporting signals are explicitly labeled as *context only*. That's what keeps the same tenant's 2026-04-22 brief distinct from its 2026-04-18 brief.
+
+**How the two stacks are orthogonal in practice:**
+
+Take three very different tenants that all ingest from the same Qdrant pool:
+
+| Tenant | Dominant 10-dim axes | What ends up in the brief |
+|---|---|---|
+| **TechCorp Inc.** (AI dev tooling) | `llms 0.40 · software_engineering 0.30 · ai_agents 0.20` | Headlines about IDE copilots, CI/CD agents, code-review automation |
+| **Ledgerwise AI** (fintech fraud + BSA/AML) | `startups 0.70 · security 0.20 · ai_policy 0.10` | Headlines about Neobanks, payment fraud, BSA/AML compliance |
+| **Meridian Capital Research** (hedge-fund alpha) | `llms 0.50 · data_engineering 0.20 · software_engineering 0.10 · general_ai 0.10 · startups 0.10` | Headlines about equity research, earnings-call NLP, portfolio construction |
+
+TechCorp's vector has **zero** mass on `security` and `ai_policy` — the prompt forbids the LLM from mentioning either. Ledgerwise has **zero** mass on `software_engineering` and `hardware` — those stay out of its briefs entirely. The vectors are close to *orthogonal* in the category space; the forbidden-category list enforces it at generation time.
+
+**Validation (prototype — `Prototyping/SEO_Personalized/prototype.py`):**
+
+Pairwise cosine similarity of the *generated brief text* (headline + blue-ocean angle + editorial titles + keywords + content structure + linking strategy), across three cross-vertical tenants on 5 consecutive days of real Qdrant + Snowflake data:
+
+|  | OLD prompt (pre-affinity) | NEW prompt (affinity injected, temp 0.4) | Δ |
+|---|---|---|---|
+| Cross-tenant same-date mean | **0.6034** | **0.5243** | **−0.0790** (sharper) |
+| Same-tenant cross-date mean | 0.9690 | 0.9473 | −0.0218 |
+
+Cross-tenant divergence improved on *every* tested date. Biggest gain was the hardest pair (fintech vs investment research, both finance-adjacent) where inter-tenant cosine dropped from 0.61 → 0.46.
+
+**Where each piece lives:**
+- Taxonomy definition — [`backend/app/core/schemas.py`](backend/app/core/schemas.py) (`CategoryWeights`, `CompanyContentAffinity`)
+- User blend + query build — [`backend/app/services/search.py`](backend/app/services/search.py)
+- Company affinity extractor — [`backend/app/services/company_affinity.py`](backend/app/services/company_affinity.py)
+- Brief generator with affinity injection — [`backend/app/services/b2b_agent.py`](backend/app/services/b2b_agent.py) (`build_strategic_brief`)
+- Extractor hook on profile save — [`backend/app/api/admin.py`](backend/app/api/admin.py) (`create_company`, `update_company`)
+- Read-only UI chip row — [`frontend/src/app/company/profile/page.tsx`](frontend/src/app/company/profile/page.tsx) (`AffinityChips`)
 
 ## Feature walk-through
 

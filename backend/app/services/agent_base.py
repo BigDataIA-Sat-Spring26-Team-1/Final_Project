@@ -58,14 +58,26 @@ class BaseAgentService:
     """
     
     @staticmethod
-    async def call_llm(messages: List[Dict[str, str]], response_model: Any = None) -> Any:
-        """Centralized LLM gateway for agents using our BaseLLMService."""
+    async def call_llm(
+        messages: List[Dict[str, str]],
+        response_model: Any = None,
+        temperature: float | None = None,
+    ) -> Any:
+        """Centralized LLM gateway for agents using our BaseLLMService.
+
+        ``temperature`` is optional — when omitted, the underlying service
+        uses its default (0.0 for structured, 0.7 for text). Pass a value
+        when a node needs more variance (e.g. the Strategic Brief agent
+        uses 0.4 so day-to-day briefs don't collapse into boilerplate)."""
         if response_model:
-            return await BaseLLMService.get_structured_completion(
-                response_model=response_model,
-                messages=messages
-            )
-        return await BaseLLMService.get_text_completion(messages=messages)
+            kwargs = {"response_model": response_model, "messages": messages}
+            if temperature is not None:
+                kwargs["temperature"] = temperature
+            return await BaseLLMService.get_structured_completion(**kwargs)
+        kwargs = {"messages": messages}
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        return await BaseLLMService.get_text_completion(**kwargs)
 
 def create_base_graph() -> StateGraph:
     """

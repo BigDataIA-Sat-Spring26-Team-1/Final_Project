@@ -52,7 +52,7 @@ def _load_company_profile(db, company_id: str) -> Optional[Dict[str, Any]]:
         """
         SELECT id, name, domain, industry, description, company_size,
                target_audience, key_products, content_pillars, competitors,
-               tone_of_voice
+               tone_of_voice, content_affinity_weights
         FROM companies
         WHERE id = %s
         """,
@@ -61,6 +61,19 @@ def _load_company_profile(db, company_id: str) -> Optional[Dict[str, Any]]:
     row = cur.fetchone()
     if not row:
         return None
+
+    raw_affinity = row[11]
+    affinity: Optional[Dict[str, float]] = None
+    if raw_affinity is not None:
+        if isinstance(raw_affinity, dict):
+            affinity = raw_affinity
+        elif isinstance(raw_affinity, str) and raw_affinity.strip():
+            try:
+                import json as _json
+                affinity = _json.loads(raw_affinity)
+            except _json.JSONDecodeError:
+                affinity = None
+
     return {
         "id": row[0],
         "name": row[1],
@@ -73,6 +86,7 @@ def _load_company_profile(db, company_id: str) -> Optional[Dict[str, Any]]:
         "content_pillars": row[8],
         "competitors": row[9],
         "tone_of_voice": row[10],
+        "content_affinity_weights": affinity,
     }
 
 
@@ -262,6 +276,7 @@ async def build_strategic_brief(state: AgentState) -> Dict[str, Any]:
     top = articles[anchor_index]
 
     company = (state.get("metadata") or {}).get("company") or {}
+    affinity: Optional[Dict[str, float]] = company.get("content_affinity_weights")
 
     signal_lines = []
     for a in articles[:8]:
@@ -274,41 +289,85 @@ async def build_strategic_brief(state: AgentState) -> Dict[str, Any]:
     profile_block = "\n".join(
         f"- {k.replace('_', ' ').title()}: {v}"
         for k, v in company.items()
-        if v and k not in ("id",)
+        if v and k not in ("id", "content_affinity_weights")
     )
 
-    prompt = f"""You are the CurateAI Strategic SEO Analyst producing a single-topic
-Strategic Brief for a corporate client. Output a *JSON object* matching the
-StrategicBrief schema — no prose, no Markdown.
+    # Build the affinity-injection block + dominant/zero category lists.
+    # When no vector is stored we skip the hard constraint entirely (new
+    # tenants whose extraction failed still get a reasonable generic
+    # brief). Validated in Prototyping/SEO_Personalized/prototype.py —
+    # cross-tenant brief cosine drops ~8pts with this injection at
+    # temperature=0.4.
+    if affinity:
+        sorted_w = sorted(affinity.items(), key=lambda x: -x[1])
+        dominant = [k for k, v in sorted_w[:3] if v >= 0.10]
+        zero = [k for k, v in affinity.items() if v < 0.05]
+        affinity_block = "\n".join(
+            f"  {k:<24} {v:.2f}" for k, v in sorted_w
+        )
+        affinity_section = f"""
+=== TENANT CONTENT-AFFINITY (10-dim taxonomy, sums to ~1.0) ===
+{affinity_block}
+DOMINANT CATEGORIES: {', '.join(dominant) or '(none)'}
+ZERO-WEIGHT CATEGORIES (never mention): {', '.join(zero) or '(none)'}
+
+=== HARD CONSTRAINTS ===
+- Every editorial_title MUST reference at least one DOMINANT category
+  using the tenant's own vocabulary, NOT the raw taxonomy token.
+- At least 3 of the primary_keywords MUST be phrases a practitioner in
+  the DOMINANT category would actually search for.
+- DO NOT reference ZERO-WEIGHT categories anywhere in the output.
+"""
+    else:
+        affinity_section = ""
+
+    # Anchor the brief on the SPECIFIC top article for this edition so
+    # day-to-day briefs for the same tenant actually differ. The LLM is
+    # told in two places — this block and the rules section — because
+    # the Pydantic structured-output path otherwise tends to smooth the
+    # variance out into tenant-voice boilerplate.
+    anchor_title = top.get("title") or "(untitled)"
+    anchor_summary = (top.get("summary") or "")[:600]
+    anchor_source = top.get("source_name") or (top.get("sources") or [""])[0]
+
+    prompt = f"""You are the CurateAI Strategic SEO Analyst writing a brief that
+could ONLY have been written for {company.get('name', 'this tenant')} on
+{brief_date_str}. Output a JSON object matching the StrategicBrief schema —
+no prose, no Markdown.
 
 === COMPANY PROFILE ===
 {profile_block or '(no extended profile on file)'}
-
-=== TOP OPPORTUNITY (anchor for the brief) ===
-Title: {top.get('title')}
-Summary: {(top.get('summary') or '')[:600]}
+{affinity_section}
+=== TOP OPPORTUNITY (PRIMARY ANCHOR — the brief's headline and blue_ocean_angle MUST be about THIS specific development applied to the tenant) ===
+Title: {anchor_title}
+Summary: {anchor_summary}
 Opportunity Score: {top.get('opportunity_score')}
 Urgency: {top.get('urgency_tier')}
-Primary source: {top.get('source_name') or (top.get('sources') or [''])[0]}
+Primary source: {anchor_source}
 
-=== SUPPORTING SIGNALS ===
+=== SUPPORTING SIGNALS (use only as context, NOT as the anchor) ===
 {chr(10).join(signal_lines)}
 
 === OUTPUT RULES ===
 1. `opportunity_score` must equal {top.get('opportunity_score')}.
 2. `urgency_tier` must equal "{top.get('urgency_tier')}".
-3. `headline` — a punchy one-liner framing the opportunity for the client.
-4. `blue_ocean_angle` — 2–3 sentences tying the trend to the company's unique
-   expertise (pull from `key_products` / `content_pillars` / `target_audience`).
-   If those are missing, infer from `description` + `industry`.
-5. `editorial_titles` — 3 to 5 article title options, differentiated in framing.
-6. `primary_keywords` — 4 to 6 keyword phrases the article should rank for.
-   Provide `monthly_volume` as a realistic integer estimate (1,000 – 100,000).
-   Leave `velocity_pct` and `status` null — they are attached server-side.
-7. `content_structure` — 4 to 6 ordered sections ({{ step, title, description }}).
-   `step` starts at 1 and increments by 1.
-8. `internal_linking_strategy` — one paragraph suggesting links to the
-   company's own `content_pillars` and a glossary of terms.
+3. `headline` — a punchy one-liner framing the PRIMARY ANCHOR for the
+   tenant specifically. It should be obvious from the headline that this
+   is about today's anchor (not a generic company overview).
+4. `blue_ocean_angle` — 2-3 sentences connecting the PRIMARY ANCHOR to a
+   SPECIFIC product or audience named in the tenant profile (cite it by
+   name). No generic "the company's expertise" phrasing.
+5. `editorial_titles` — 3 to 5 article title options, each a DIFFERENT
+   framing of the anchor (practitioner how-to, industry analysis,
+   regulatory angle, competitive threat, adoption playbook).
+6. `primary_keywords` — 4 to 6 keyword phrases the article should rank
+   for. `monthly_volume` must reflect the tenant's audience size (niche
+   B2B: 500-5000; broad consumer topics: 10k-100k).
+   Leave `velocity_pct` and `status` null — attached server-side.
+7. `content_structure` — 4 to 6 ordered sections. `step` starts at 1.
+8. `internal_linking_strategy` — one paragraph suggesting cross-links to
+   the tenant's own content pillars and a glossary of domain-specific
+   terms from its profile.
 
 Tone: {(company.get('tone_of_voice') or 'authoritative, concise, data-driven')}.
 Do not invent facts not supported by the signals above.
@@ -318,6 +377,11 @@ Do not invent facts not supported by the signals above.
         brief: StrategicBrief = await BaseAgentService.call_llm(
             messages=[{"role": "user", "content": prompt}],
             response_model=StrategicBrief,
+            # Bumped from 0.0 so the same tenant's day-to-day briefs don't
+            # collapse into identical prose when the anchor changes.
+            # Validated in the prototype — went from ~0.96 same-tenant
+            # cross-date cosine to ~0.85 with this bump alone.
+            temperature=0.4,
         )
     except Exception as exc:  # noqa: BLE001
         logger.error("StrategicBrief LLM call failed", error=str(exc), exc_info=True)

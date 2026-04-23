@@ -1,0 +1,16 @@
+[project]
+name = "seo-personalized-prototype"
+version = "0.1.0"
+description = "Prototype: give companies a 10-dim category-affinity vector (mirror of user personas) so Qdrant retrieval and Strategic Briefs diverge per-tenant instead of collapsing into generic-tech output."
+requires-python = ">=3.12"
+dependencies = [
+    "openai>=1.50",
+    "pydantic>=2.8",
+    "numpy>=2.0",
+    "python-dotenv>=1.0",
+    "snowflake-connector-python>=3.12",
+    "qdrant-client>=1.11",
+]
+
+[tool.uv]
+package = false

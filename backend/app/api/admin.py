@@ -24,6 +24,7 @@ from app.core.airflow_client import AirflowUnavailable, trigger_dag
 from app.core.logging_conf import get_logger
 from app.core.schemas import DAGTriggerResponse
 from app.db.snowflake import get_db_connection
+from app.services.company_affinity import extract_company_affinity
 
 logger = get_logger("app.api.admin")
 router = APIRouter()
@@ -271,6 +272,28 @@ async def create_company(
         logger.error("Company creation failed", error=str(exc))
         raise HTTPException(status_code=500, detail=f"Create failed: {exc}")
 
+    # Best-effort affinity extraction on create. Create typically has a
+    # thin profile (name + maybe industry) so the vector will look
+    # generic — PUT /companies/{id} re-extracts once the full profile is
+    # filled in, which is when the vector becomes actually useful.
+    try:
+        affinity = await extract_company_affinity(
+            {
+                "name": payload.name,
+                "industry": payload.industry,
+                "description": payload.description,
+                "company_size": payload.company_size,
+            }
+        )
+        if affinity:
+            cur.execute(
+                "UPDATE companies SET content_affinity_weights = PARSE_JSON(%s) WHERE id = %s",
+                (json.dumps(affinity), company_id),
+            )
+            db.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Affinity extraction on create skipped", error=str(exc))
+
     logger.info("Company created", company_id=company_id, name=payload.name)
     return {"id": company_id, "name": payload.name, "status": "created"}
 
@@ -308,6 +331,19 @@ async def list_companies(
     return {"total": total, "results": results}
 
 
+def _parse_variant(raw: Any) -> Optional[Any]:
+    if raw is None:
+        return None
+    if isinstance(raw, (dict, list)):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
 @router.get("/companies/{company_id}")
 async def get_company(
     company_id: str,
@@ -319,7 +355,7 @@ async def get_company(
         """
         SELECT id, name, domain, industry, description, company_size,
                target_audience, key_products, content_pillars, competitors,
-               tone_of_voice, created_at, updated_at
+               tone_of_voice, content_affinity_weights, created_at, updated_at
         FROM companies
         WHERE id = %s
         """,
@@ -340,8 +376,9 @@ async def get_company(
         "content_pillars": row[8],
         "competitors": row[9],
         "tone_of_voice": row[10],
-        "created_at": _iso(row[11]),
-        "updated_at": _iso(row[12]),
+        "content_affinity_weights": _parse_variant(row[11]),
+        "created_at": _iso(row[12]),
+        "updated_at": _iso(row[13]),
     }
 
 
@@ -398,7 +435,30 @@ async def update_company(
     )
     db.commit()
     logger.info("Company updated", company_id=company_id, fields=list(dirty.keys()))
-    return {"company_id": company_id, "status": "updated"}
+
+    # Re-extract the content-affinity vector against the NEW profile —
+    # the LLM's output is a pure function of the profile text so any
+    # material edit should refresh the vector. Best-effort: if the call
+    # fails we keep the existing vector (or leave null on create).
+    affinity_updated = False
+    try:
+        affinity = await extract_company_affinity(dirty)
+        if affinity:
+            cur.execute(
+                "UPDATE companies SET content_affinity_weights = PARSE_JSON(%s), "
+                "updated_at = CURRENT_TIMESTAMP WHERE id = %s",
+                (json.dumps(affinity), company_id),
+            )
+            db.commit()
+            affinity_updated = True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Affinity re-extract on update skipped", error=str(exc))
+
+    return {
+        "company_id": company_id,
+        "status": "updated",
+        "affinity_refreshed": affinity_updated,
+    }
 
 
 # ---------------------------------------------------------------------------

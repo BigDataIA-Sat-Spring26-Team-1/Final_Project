@@ -97,6 +97,24 @@ class CategoryWeights(BaseModel):
     data_engineering: float = Field(description="Weight for Data Engineering (0.0 to 1.0)")
     startups: float = Field(description="Weight for Startups (0.0 to 1.0)")
 
+
+class CompanyContentAffinity(BaseModel):
+    """B2B mirror of CategoryWeights. Same 10-dim taxonomy; the distribution
+    describes where a tenant's content gravity sits. Populated per-company
+    by ``app.services.company_affinity.extract_company_affinity`` and
+    consumed as a hard constraint in the B2B Strategic Brief prompt."""
+
+    llms: float = Field(ge=0.0, le=1.0)
+    ai_agents: float = Field(ge=0.0, le=1.0)
+    computer_vision: float = Field(ge=0.0, le=1.0)
+    security: float = Field(ge=0.0, le=1.0)
+    hardware: float = Field(ge=0.0, le=1.0)
+    software_engineering: float = Field(ge=0.0, le=1.0)
+    ai_policy: float = Field(ge=0.0, le=1.0)
+    general_ai: float = Field(ge=0.0, le=1.0)
+    data_engineering: float = Field(ge=0.0, le=1.0)
+    startups: float = Field(ge=0.0, le=1.0)
+
 class PersonaExtractionResult(BaseModel):
     """Output layout mapped securely from raw text via the LLM pipeline."""
     name: str = Field(description="Full name of the user.")
