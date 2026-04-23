@@ -13,9 +13,6 @@ async def get_user_recommendations(
     limit: int = Query(5, ge=1, le=20),
     db: SnowflakeConnection = Depends(get_db_connection)
 ):
-    """
-    P3 Retrieval Router: Fetches top personalized articles for a specific user.
-    """
     logger.info("Fetching personalized recommendations via API", user_id=user_id, limit=limit)
     
     try:

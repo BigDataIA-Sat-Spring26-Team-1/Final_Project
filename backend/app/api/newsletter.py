@@ -1,20 +1,10 @@
-"""B2C newsletter generation.
-
-Idempotent per (user_id, edition_date): if a newsletter already exists for
-today in Snowflake we return it as-is with `already_generated=True` and never
-rerun the LangGraph. This is the contract the frontend and the DAG both rely
-on — regeneration is explicitly disallowed.
-"""
 from __future__ import annotations
-
 import uuid
 from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
-
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from snowflake.connector import SnowflakeConnection
-
 from app.core.logging_conf import get_logger
 from app.core.schemas import B2CNewsletterRequest, B2CNewsletterResponse
 from app.db.snowflake import get_db_connection
@@ -24,12 +14,10 @@ from app.services.mailer import render_personalized_html, send_newsletter_email
 logger = get_logger("newsletter_api")
 router = APIRouter()
 
-
 def _iso(value) -> Optional[str]:
     if value is None:
         return None
     return value.isoformat() if hasattr(value, "isoformat") else str(value)
-
 
 def _load_existing_newsletter(
     db: SnowflakeConnection, user_id: str, edition: str
@@ -62,7 +50,6 @@ def _load_existing_newsletter(
         "edition_date": _iso(row[5]),
     }
 
-
 def _persist_newsletter(
     db: SnowflakeConnection,
     user_id: str,
@@ -70,7 +57,6 @@ def _persist_newsletter(
     content: str,
     path: List[str],
 ) -> Tuple[str, str]:
-    """Upsert one newsletter row per (user_id, edition_date). Returns (status, generated_at_iso)."""
     path_str = ",".join(path)[:500] if path else None
     cur = db.cursor()
     cur.execute(
@@ -104,8 +90,6 @@ def _persist_newsletter(
         ),
     )
     db.commit()
-    # Re-read the timestamp so the response reflects what went into the column,
-    # not just client-side "now".
     cur.execute(
         "SELECT generated_at FROM newsletters WHERE user_id = %s AND edition_date = %s",
         (user_id, edition),
@@ -114,13 +98,11 @@ def _persist_newsletter(
     generated_at = _iso(row[0]) if row and row[0] is not None else None
     return "PUBLISHED", generated_at or ""
 
-
 @router.post("/b2c", response_model=B2CNewsletterResponse)
 async def generate_b2c_newsletter(
     request: B2CNewsletterRequest,
     db: SnowflakeConnection = Depends(get_db_connection),
 ) -> B2CNewsletterResponse:
-    """Return today's newsletter for the user, generating it only if missing."""
     user_id = request.user_id
     edition = date.today().isoformat()
     logger.info(
@@ -175,11 +157,6 @@ async def generate_b2c_newsletter(
     except Exception as e:
         logger.error("Newsletter persistence failed; returning unsaved content", error=str(e))
 
-    # Auto-send intentionally removed: email delivery is a manual action.
-    # Users trigger it from the Newsletter page's "Send to My Inbox" button
-    # (idempotent per user/day); admins can batch-dispatch via
-    # /admin/newsletters/send-all. There is no scheduled auto-email path.
-
     return B2CNewsletterResponse(
         status=agent_status,
         html_content=content,
@@ -188,11 +165,6 @@ async def generate_b2c_newsletter(
         generated_at=generated_at or None,
         edition_date=edition,
     )
-
-
-# ---------------------------------------------------------------------------
-# Newsletter delivery (MailerSend)
-# ---------------------------------------------------------------------------
 
 class NewsletterSendRequest(BaseModel):
     user_id: str = Field(..., description="Recipient's internal user id.")
@@ -217,7 +189,6 @@ class NewsletterSendResponse(BaseModel):
     common_count: Optional[int] = None
     personal_count: Optional[int] = None
 
-
 class NewsletterPreviewResponse(BaseModel):
     user_id: str
     edition_date: str
@@ -228,23 +199,12 @@ class NewsletterPreviewResponse(BaseModel):
     common_count: int = 0
     personal_count: int = 0
 
-
 @router.get("/preview", response_model=NewsletterPreviewResponse)
 async def preview_newsletter_email(
     user_id: str,
     edition_date: Optional[str] = None,
     db: SnowflakeConnection = Depends(get_db_connection),
 ) -> NewsletterPreviewResponse:
-    """Render the email HTML the user would receive on ``edition_date``.
-
-    * For **today** (no ``edition_date``) we render on the fly via
-      ``render_personalized_html`` so the preview always reflects the
-      freshest data, then check the ``newsletters`` row for ``sent_at``.
-    * For a **past date** we serve the persisted ``newsletters`` row so the
-      user can re-read the exact email they received. 404 if no row exists
-      for that date (no retroactive rendering — the underlying cluster
-      snapshots change daily).
-    """
     today = date.today().isoformat()
     target = edition_date or today
 
@@ -263,16 +223,10 @@ async def preview_newsletter_email(
     sent_at = _iso(row[0]) if row and row[0] is not None else None
     recipient = row[1] if row else None
     stored_html = ((row[2] if row else None) or (row[3] if row else None) or "").strip()
-
-    # Always try the on-the-fly render first — the mailer pulls that day's
-    # trend snapshot + the user's live persona, so the preview accurately
-    # reflects what the user would receive for that edition. We fall back to
-    # the stored HTML if the render pipeline can't build a preview (e.g., the
-    # trend DAG hasn't caught up yet).
     rendered = None
     try:
         rendered = await render_personalized_html(user_id, target, db)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  
         logger.warning(
             "Preview render failed; will fall back to stored copy",
             user_id=user_id,
@@ -309,26 +263,18 @@ async def preview_newsletter_email(
         personal_count=rendered.get("personal_count", 0),
     )
 
-
 @router.post("/send", response_model=NewsletterSendResponse)
 async def send_single_newsletter(
     request: NewsletterSendRequest,
     db: SnowflakeConnection = Depends(get_db_connection),
 ) -> NewsletterSendResponse:
-    """Dispatch one user's newsletter by email via MailerSend.
-
-    Idempotent per ``(user_id, edition_date)`` — we never send twice for the
-    same day. Errors come back as structured payloads (``FAILED``) rather than
-    raising, so the frontend can surface them cleanly.
-    """
     try:
         result = await send_newsletter_email(
             user_id=request.user_id,
             edition_date=request.edition_date,
             db=db,
         )
-    except Exception as exc:  # noqa: BLE001 — surface any unexpected issue
+    except Exception as exc:  
         logger.error("Unexpected send failure", error=str(exc), exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
-
     return NewsletterSendResponse(**result)

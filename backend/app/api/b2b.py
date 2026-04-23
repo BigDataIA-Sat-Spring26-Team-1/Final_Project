@@ -1,19 +1,10 @@
-"""B2B intelligence brief generation.
-
-Idempotent per (company_id, brief_date=today): if a brief for today exists in
-Snowflake we return it unchanged with ``already_generated=True``. The agent is
-only invoked on cache misses. Same contract as the B2C newsletter endpoint.
-"""
 from __future__ import annotations
-
 import json
 import uuid
 from datetime import date
 from typing import Any, Dict, Optional, Tuple
-
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from snowflake.connector import SnowflakeConnection
-
 from app.core.limiter import limiter
 from app.core.logging_conf import get_logger
 from app.core.schemas import B2BReportRequest, B2BReportResponse
@@ -24,12 +15,10 @@ from app.services.keyword_velocity import compute_keyword_velocity
 logger = get_logger("app.api.b2b")
 router = APIRouter()
 
-
 def _iso(value) -> Optional[str]:
     if value is None:
         return None
     return value.isoformat() if hasattr(value, "isoformat") else str(value)
-
 
 def _parse_variant(raw: Any) -> Optional[Dict[str, Any]]:
     if raw is None:
@@ -42,7 +31,6 @@ def _parse_variant(raw: Any) -> Optional[Dict[str, Any]]:
         except json.JSONDecodeError:
             return None
     return None
-
 
 def _load_existing_brief(
     db: SnowflakeConnection, company_id: str, brief_date: str
@@ -73,7 +61,6 @@ def _load_existing_brief(
         "brief_date": _iso(row[4]) or brief_date,
         "structured_brief": _parse_variant(row[5]),
     }
-
 
 def _persist_brief(
     db: SnowflakeConnection,
@@ -111,7 +98,6 @@ def _persist_brief(
     generated_at = _iso(row[0]) if row and row[0] is not None else ""
     return "GENERATED", generated_at
 
-
 @router.post("/report", response_model=B2BReportResponse)
 @limiter.limit("10/minute")
 async def generate_b2b_report(
@@ -134,13 +120,10 @@ async def generate_b2b_report(
     ),
     db: SnowflakeConnection = Depends(get_db_connection),
 ) -> B2BReportResponse:
-    """Return today's brief for the company, generating it only if missing."""
-    company_id = payload.user_id  # legacy contract: agent state uses ``user_id``
+    company_id = payload.user_id 
     today = brief_date or date.today().isoformat()
     logger.info("B2B report requested", company_id=company_id, brief_date=today, force=force)
 
-    # Force path: drop the target date's row(s) so the insert below is free to
-    # persist a fresh brief. Only the target date is cleared.
     if force:
         cur = db.cursor()
         cur.execute(
@@ -218,7 +201,6 @@ async def generate_b2b_report(
         urgency_tier=urgency_tier,
     )
 
-
 @router.get("/keyword-velocity")
 async def keyword_velocity(
     date: Optional[str] = Query(
@@ -228,19 +210,11 @@ async def keyword_velocity(
     top_n: int = Query(30, ge=1, le=100),
     min_mentions: int = Query(3, ge=1, le=50),
 ) -> Dict[str, Any]:
-    """SpaCy NER-driven velocity report.
 
-    Discovers ORG / PRODUCT / WORK_OF_ART / PERSON entities across the last
-    24h of ingested titles, compares per-entity mention counts to the prior
-    day, and tags each as SURGING / STABLE / DECLINING. Response mirrors the
-    shape produced by ``Temp/SEO_Prototype/s5_keyword_velocity_test.py``.
-    """
     logger.info("keyword_velocity requested", date=date, top_n=top_n)
     try:
         return compute_keyword_velocity(target_date=date, top_n=top_n, min_mentions=min_mentions)
     except RuntimeError as exc:
-        # Missing spaCy model — surface as a clean 503 so the UI can render a
-        # helpful "install the model" banner rather than a 500.
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
         logger.error("keyword_velocity failed", error=str(exc), exc_info=True)
