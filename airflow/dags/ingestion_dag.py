@@ -110,7 +110,10 @@ with DAG(
     dag_id="ingestion_dag",
     default_args=default_args(),
     description="Parallel multi-source ingestion (RSS, ArXiv, HN) → Snowflake",
-    schedule_interval="@daily",
+    # 10:30 UTC (6:30 AM EDT) — first step in the daily pipeline stagger.
+    # trend_dag fires at 10:50, qdrant_sync at 11:05, personalization at 11:20,
+    # newsletter at 11:50. Deduplication stays @hourly (reactive).
+    schedule_interval="30 10 * * *",
     catchup=False,
     max_active_runs=1,
     tags=["ingestion", "curateai"],

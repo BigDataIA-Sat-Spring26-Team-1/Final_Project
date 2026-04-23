@@ -44,7 +44,9 @@ with DAG(
     dag_id="trend_dag",
     default_args=default_args(),
     description="Re-rank all clusters by density + social signals",
-    schedule_interval="@daily",
+    # 10:50 UTC — runs ~20 min after ingestion starts so the freshest raw
+    # articles have been deduped into clusters by the hourly dedup run.
+    schedule_interval="50 10 * * *",
     catchup=False,
     max_active_runs=1,
     tags=["trend", "curateai"],

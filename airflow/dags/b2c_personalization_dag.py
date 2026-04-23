@@ -134,7 +134,8 @@ with DAG(
     dag_id="b2c_personalization_dag",
     default_args=default_args(),
     description="Pre-compute personalized daily selections per user",
-    schedule_interval="@daily",
+    # 11:20 UTC — runs after qdrant_sync (11:05) so retrieval hits fresh vectors.
+    schedule_interval="20 11 * * *",
     catchup=False,
     max_active_runs=1,
     tags=["b2c", "personalization", "curateai"],

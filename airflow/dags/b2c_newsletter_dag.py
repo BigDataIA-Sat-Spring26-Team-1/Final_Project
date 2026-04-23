@@ -176,7 +176,9 @@ with DAG(
     dag_id="b2c_newsletter_dag",
     default_args=default_args(),
     description="Generate the daily B2C newsletter for every eligible user",
-    schedule_interval="@daily",
+    # 11:50 UTC — last step in the daily stagger, runs after qdrant_sync +
+    # personalization finish so retrieval sees the reconciled vectors.
+    schedule_interval="50 11 * * *",
     catchup=False,
     max_active_runs=1,
     tags=["b2c", "newsletter", "curateai"],
