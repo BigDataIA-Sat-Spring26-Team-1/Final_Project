@@ -272,6 +272,35 @@ export interface TrendTopResponse {
   results: TrendCluster[];
 }
 
+/** Single entity row in the SpaCy keyword-velocity report. */
+export interface KeywordVelocityRow {
+  entity: string;
+  current: number;
+  previous: number;
+  total_mentions: number;
+  velocity_pct: number;
+  status: 'SURGING' | 'STABLE' | 'DECLINING';
+}
+
+export interface KeywordVelocityResponse {
+  target_date: string;
+  previous_date: string;
+  total: number;
+  results: KeywordVelocityRow[];
+}
+
+export function getKeywordVelocity(
+  date?: string,
+  topN: number = 30,
+  signal?: AbortSignal,
+): Promise<KeywordVelocityResponse> {
+  return request<KeywordVelocityResponse>('/api/v1/b2b/keyword-velocity', {
+    method: 'GET',
+    query: { date, top_n: topN },
+    signal,
+  });
+}
+
 /** Returned by GET /api/v1/personas/{user_id}. */
 export interface StoredPersona {
   user_id: string;

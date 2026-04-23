@@ -10,46 +10,39 @@ dependencies = [
     # uvicorn[standard] pulls in uvloop + httptools for production-grade throughput.
     "fastapi>=0.110.0",
     "uvicorn[standard]>=0.29.0",
-
     # --- Config, validation, logging ---
     "pydantic>=2.7.0",
     "pydantic-settings>=2.2.1",
     "python-dotenv>=1.0.1",
     "structlog>=24.1.0",
-
     # --- Request parsing / rate limiting ---
     "python-multipart>=0.0.24",
     "slowapi>=0.1.9",
-
     # --- Data layer ---
     "snowflake-connector-python>=3.10.0",
     "qdrant-client>=1.17.1",
     "pandas>=2.3.3",
     "pyarrow>=23.0.1",
-
     # --- LLM + agent stack ---
     "litellm>=1.83.4",
     "langgraph>=1.1.6",
     "langchain-core>=1.2.28",
     "tenacity>=9.1.4",
-
     # --- Content ingestion + parsing ---
     "feedparser>=6.0.12",
     "trafilatura>=2.0.0",
     "pdfplumber>=0.11.4",
     "pypdf>=6.9.2",
     "python-dateutil>=2.9.0.post0",
-
     # --- ML / numerical (dedup + scoring) ---
     "scikit-learn>=1.7.2",
     "numpy>=2.2.6",
-
     # --- Observability ---
     "prometheus-client>=0.21.0",
-
     # --- MCP server ---
     # FastMCP lives in the base package; no extras needed.
     "mcp>=1.2.1",
+    "spacy>=3.8.14",
 ]
 
 [project.optional-dependencies]
