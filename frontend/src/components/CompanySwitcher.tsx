@@ -53,7 +53,7 @@ export function CompanySwitcher({ currentCompanyId, onSelect }: CompanySwitcherP
       </button>
 
       {isOpen && (
-        <div className="absolute top-full left-0 mt-2 w-64 bg-white border border-slate-200 rounded-lg shadow-lg z-50">
+        <div className="absolute top-full left-0 mt-2 w-64 bg-white border border-slate-200 rounded-lg shadow-2xl z-[100]">
           {isLoading ? (
             <div className="p-4 flex items-center justify-center gap-2 text-slate-500">
               <Loader2 className="w-4 h-4 animate-spin" />

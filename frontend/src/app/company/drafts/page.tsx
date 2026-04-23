@@ -8,6 +8,7 @@
 
 import { Calendar, FileText, Loader2, Plus, TriangleAlert } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
 
 import { CompanySwitcher } from '@/components/CompanySwitcher';
 import { PageWrapper } from '@/components/PageWrapper';
@@ -228,9 +229,16 @@ export default function CompanyDraftsPage() {
                     )}
                   </div>
                   {selectedBrief.brief_content ? (
-                    <pre className="whitespace-pre-wrap text-sm leading-relaxed text-white/90 font-mono bg-white/[0.02] rounded-2xl border border-white/10 p-6 max-h-[70vh] overflow-auto">
-                      {selectedBrief.brief_content}
-                    </pre>
+                    <div className="brief-sections space-y-4 max-h-[70vh] overflow-auto pr-2">
+                      {splitBriefIntoCards(selectedBrief.brief_content).map((section, idx) => (
+                        <article
+                          key={idx}
+                          className="rounded-2xl border border-white/10 bg-white/[0.02] p-6 prose prose-invert max-w-none prose-headings:mt-0 prose-headings:mb-3 prose-p:text-white/80 prose-li:text-white/80 prose-strong:text-white"
+                        >
+                          <ReactMarkdown>{section}</ReactMarkdown>
+                        </article>
+                      ))}
+                    </div>
                   ) : (
                     <p className="text-dim italic">No content recorded for this brief.</p>
                   )}
@@ -242,4 +250,32 @@ export default function CompanyDraftsPage() {
       </div>
     </PageWrapper>
   );
+}
+
+/**
+ * Split the B2B agent's Markdown brief into per-section cards.
+ *
+ * The agent emits a stable set of H1/H2 headings (Executive Intelligence
+ * Briefing, Key Opportunity Signals, Market Trends Overview, Recommended
+ * Actions). Rendering each heading's block as its own card mirrors the
+ * tiled layout in the SEO prototype UI. If the content has no headings
+ * we fall back to a single tile so nothing gets dropped.
+ */
+function splitBriefIntoCards(markdown: string): string[] {
+  const lines = markdown.split('\n');
+  const sections: string[] = [];
+  let current: string[] = [];
+
+  for (const line of lines) {
+    const isHeading = /^#{1,3}\s+/.test(line);
+    if (isHeading && current.length > 0) {
+      sections.push(current.join('\n').trim());
+      current = [line];
+    } else {
+      current.push(line);
+    }
+  }
+  if (current.length > 0) sections.push(current.join('\n').trim());
+
+  return sections.filter((s) => s.length > 0);
 }

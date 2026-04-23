@@ -17,6 +17,8 @@ import {
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useState, useEffect } from 'react';
+import { CompanySwitcher } from '@/components/CompanySwitcher';
+import { UserSwitcher } from '@/components/UserSwitcher';
 
 type Role = 'ADMIN' | 'USER' | 'COMPANY';
 
@@ -39,21 +41,32 @@ const NAV_CONFIG = {
   ]
 };
 
+const USER_KEY = 'curateai:user_id';
+const COMPANY_KEY = 'selectedCompanyId';
+
 export function Navigation() {
   const pathname = usePathname();
   const [role, setRole] = useState<Role>('ADMIN');
   const [isRoleMenuOpen, setIsRoleMenuOpen] = useState(false);
   const [hasMounted, setHasMounted] = useState(false);
 
-  // Initialize role from localStorage on mount.
-  // Wrapped in an async IIFE so React 19's set-state-in-effect linter lets
-  // the setState calls through — the underlying reads are still synchronous.
+  // Global active-tenant state. These are the same sessionStorage keys each
+  // page already reads, so this sidebar picker stays in sync with the
+  // existing per-page switchers without any extra plumbing.
+  const [globalUserId, setGlobalUserId] = useState<string | null>(null);
+  const [globalCompanyId, setGlobalCompanyId] = useState<string | null>(null);
+
+  // Initialize role + active tenants from browser storage on mount.
   useEffect(() => {
     (async () => {
       setHasMounted(true);
       const savedRole = localStorage.getItem('curateai_role') as Role;
       if (savedRole && (['ADMIN', 'USER', 'COMPANY'] as Role[]).includes(savedRole)) {
         setRole(savedRole);
+      }
+      if (typeof window !== 'undefined') {
+        setGlobalUserId(sessionStorage.getItem(USER_KEY));
+        setGlobalCompanyId(sessionStorage.getItem(COMPANY_KEY));
       }
     })();
   }, []);
@@ -129,6 +142,36 @@ export function Navigation() {
           )}
         </AnimatePresence>
       </div>
+
+      {role === 'USER' && (
+        <div className="mb-4 space-y-2">
+          <p className="px-1 text-[10px] font-black text-muted-foreground uppercase tracking-widest">
+            Active User
+          </p>
+          <UserSwitcher
+            currentUserId={globalUserId}
+            onSelect={(id) => {
+              setGlobalUserId(id);
+              if (typeof window !== 'undefined') sessionStorage.setItem(USER_KEY, id);
+            }}
+          />
+        </div>
+      )}
+
+      {role === 'COMPANY' && (
+        <div className="mb-4 space-y-2">
+          <p className="px-1 text-[10px] font-black text-muted-foreground uppercase tracking-widest">
+            Active Company
+          </p>
+          <CompanySwitcher
+            currentCompanyId={globalCompanyId}
+            onSelect={(id) => {
+              setGlobalCompanyId(id);
+              if (typeof window !== 'undefined') sessionStorage.setItem(COMPANY_KEY, id);
+            }}
+          />
+        </div>
+      )}
 
       <div className="flex-1 space-y-1 overflow-y-auto">
         <p className="px-3 text-[10px] font-black text-muted-foreground uppercase tracking-widest mb-4">
