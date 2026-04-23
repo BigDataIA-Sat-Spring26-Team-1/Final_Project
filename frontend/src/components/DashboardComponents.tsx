@@ -28,7 +28,8 @@ type IconType = React.ComponentType<{ className?: string }>;
 // --- Global Stat Card ---
 type StatCardProps = {
   title: string;
-  value: string | number;
+  /** Accepts a ReactNode so callers can pass a <Spinner/> while loading. */
+  value: React.ReactNode;
   /** "+12%", "-2%", or "0" — the + / - / 0 prefix drives the colour. */
   change: string;
   description: string;
@@ -124,9 +125,10 @@ export function TrendTag({ name, count, velocity }: TrendTagProps) {
 }
 
 // --- Trending Feature Card ---
+// Accepts a ReactNode value so callers can render a <Spinner/> while loading.
 type TrendFeatureCardProps = {
   title: string;
-  value: string | number;
+  value: React.ReactNode;
   icon: IconType;
   detail: string;
   isPrimary?: boolean;

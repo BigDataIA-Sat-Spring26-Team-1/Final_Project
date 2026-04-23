@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { OpportunityItem } from '@/components/DashboardComponents';
 import { PageWrapper } from '@/components/PageWrapper';
+import { Spinner, SpinnerBlock } from '@/components/Spinner';
 import {
   ApiError,
   generateB2BReport,
@@ -39,6 +40,7 @@ export default function SEOStrategyPage() {
   const [companyId, setCompanyId] = useState('');
   const [report, setReport] = useState<B2BReportResponse | null>(null);
   const [trends, setTrends] = useState<TrendCluster[]>([]);
+  const [trendsLoading, setTrendsLoading] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -57,9 +59,17 @@ export default function SEOStrategyPage() {
   // the ranked trend snapshot until a structured B2B endpoint exists.
   useEffect(() => {
     const controller = new AbortController();
-    getTopTrends(6, undefined, controller.signal)
-      .then((r) => setTrends(r.results))
-      .catch(() => setTrends([]));
+    (async () => {
+      setTrendsLoading(true);
+      try {
+        const r = await getTopTrends(6, undefined, controller.signal);
+        setTrends(r.results);
+      } catch {
+        setTrends([]);
+      } finally {
+        setTrendsLoading(false);
+      }
+    })();
     return () => controller.abort();
   }, []);
 
@@ -138,7 +148,9 @@ export default function SEOStrategyPage() {
               Vector Alignment
             </p>
             <div className="flex items-center gap-3">
-              <h3 className="text-2xl font-black">{alignment}</h3>
+              <h3 className="text-2xl font-black">
+                {trendsLoading ? <Spinner size="sm" /> : alignment}
+              </h3>
               <div className="w-24 h-2 bg-white/10 rounded-full overflow-hidden">
                 <div
                   className="h-full bg-primary transition-all"
@@ -152,7 +164,7 @@ export default function SEOStrategyPage() {
               Top Keyword Cluster
             </p>
             <h3 className="text-xl font-bold">
-              {topCluster ? truncate(topCluster.title, 32) : '—'}
+              {trendsLoading ? <Spinner size="sm" /> : topCluster ? truncate(topCluster.title, 32) : '—'}
             </h3>
           </div>
         </div>
@@ -171,7 +183,9 @@ export default function SEOStrategyPage() {
               Strategic Opportunities
             </h2>
             <div className="space-y-4">
-              {trends.length === 0 ? (
+              {trendsLoading ? (
+                <SpinnerBlock label="Loading trends" />
+              ) : trends.length === 0 ? (
                 <p className="text-sm text-dim italic">
                   No ranked trends yet — run ingestion + rank, then refresh.
                 </p>

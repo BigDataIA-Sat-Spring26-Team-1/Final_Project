@@ -43,9 +43,9 @@ export default function CompanyTrendsPage() {
 
   useEffect(() => {
     const controller = new AbortController();
-    setLoading(true);
-    setError(null);
     (async () => {
+      setLoading(true);
+      setError(null);
       try {
         const data = await getTopTrends(
           30,

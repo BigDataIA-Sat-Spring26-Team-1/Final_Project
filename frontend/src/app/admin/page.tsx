@@ -21,6 +21,7 @@ import { ActivityItem, StatCard } from '@/components/DashboardComponents';
 import { AdminManagementPanel } from '@/components/AdminManagementPanel';
 import { MetricsPanel } from '@/components/MetricsPanel';
 import { PageWrapper } from '@/components/PageWrapper';
+import { Spinner, SpinnerBlock } from '@/components/Spinner';
 import {
   ApiError,
   getHealth,
@@ -35,8 +36,10 @@ export default function AdminDashboard() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
   const [trends, setTrends] = useState<TrendCluster[]>([]);
+  const [trendsLoading, setTrendsLoading] = useState(true);
   const [userTotal, setUserTotal] = useState<number | null>(null);
   const [companyTotal, setCompanyTotal] = useState<number | null>(null);
+  const [statsLoading, setStatsLoading] = useState(true);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -57,6 +60,8 @@ export default function AdminDashboard() {
       if (t) setTrends(t.results);
       if (u) setUserTotal(u.total);
       if (c) setCompanyTotal(c.total);
+      setTrendsLoading(false);
+      setStatsLoading(false);
     });
     return () => controller.abort();
   }, []);
@@ -86,31 +91,30 @@ export default function AdminDashboard() {
         )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          {/* TODO: wire to /api/v1/admin/users when endpoint lands. */}
           <StatCard
             title="Total B2C Users"
-            value={userTotal !== null ? String(userTotal) : '—'}
+            value={statsLoading ? <Spinner size="sm" /> : userTotal !== null ? String(userTotal) : '—'}
             change={userTotal !== null ? `+${userTotal}` : '0'}
             description="Count from /admin/users"
             icon={Users}
           />
           <StatCard
             title="Total B2B Entities"
-            value={companyTotal !== null ? String(companyTotal) : '—'}
+            value={statsLoading ? <Spinner size="sm" /> : companyTotal !== null ? String(companyTotal) : '—'}
             change={companyTotal !== null ? `+${companyTotal}` : '0'}
             description="Count from /admin/companies"
             icon={Building2}
           />
           <StatCard
             title="High-Velocity Clusters"
-            value={String(surgingCount)}
+            value={trendsLoading ? <Spinner size="sm" /> : String(surgingCount)}
             change={surgingCount > 0 ? `+${surgingCount}` : '0'}
             description="From the last trend ranking pass"
             icon={Zap}
           />
           <StatCard
             title="System Status"
-            value={health?.status ?? '—'}
+            value={statsLoading ? <Spinner size="sm" /> : health?.status ?? '—'}
             change={health ? '100%' : '0'}
             description={
               health
@@ -132,7 +136,8 @@ export default function AdminDashboard() {
               High Velocity Clusters
             </h2>
             <div className="space-y-4">
-              {trends.length === 0 && (
+              {trendsLoading && <SpinnerBlock label="Loading clusters" />}
+              {!trendsLoading && trends.length === 0 && (
                 <p className="text-sm text-dim italic">
                   No ranked clusters yet — trigger ingestion + rank to populate.
                 </p>

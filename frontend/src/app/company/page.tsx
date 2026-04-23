@@ -22,6 +22,7 @@ import {
   TrendFeatureCard,
 } from '@/components/DashboardComponents';
 import { PageWrapper } from '@/components/PageWrapper';
+import { Spinner, SpinnerBlock } from '@/components/Spinner';
 import {
   ApiError,
   getTopTrends,
@@ -35,6 +36,7 @@ export default function CompanyDashboard() {
   const [companyId, setCompanyId] = useState('');
   const [trends, setTrends] = useState<TrendCluster[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   // Hydrate the last-used company id from sessionStorage once on mount. The
   // async IIFE shape appeases React 19's set-state-in-effect linter; the
@@ -45,16 +47,22 @@ export default function CompanyDashboard() {
 
   useEffect(() => {
     const controller = new AbortController();
-    getTopTrends(CHART_BARS, undefined, controller.signal)
-      .then((r) => setTrends(r.results))
-      .catch((err) => {
-        if (err.name === 'AbortError') return;
+    (async () => {
+      setLoading(true);
+      try {
+        const r = await getTopTrends(CHART_BARS, undefined, controller.signal);
+        setTrends(r.results);
+      } catch (err) {
+        if ((err as Error).name === 'AbortError') return;
         setError(
           err instanceof ApiError
             ? `${err.status}: ${err.detail ?? err.message}`
             : (err as Error).message,
         );
-      });
+      } finally {
+        setLoading(false);
+      }
+    })();
     return () => controller.abort();
   }, []);
 
@@ -134,7 +142,7 @@ export default function CompanyDashboard() {
                       Top Cluster Score
                     </p>
                     <p className="text-xl font-bold text-emerald-400">
-                      {top ? Math.round(top.final_trend_score) : '—'}
+                      {loading ? <Spinner size="sm" /> : top ? Math.round(top.final_trend_score) : '—'}
                     </p>
                   </div>
                 </div>
@@ -156,20 +164,32 @@ export default function CompanyDashboard() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <TrendFeatureCard
                 title="Authority Overlap"
-                value={top ? `${top.cluster_size} sources` : '—'}
+                value={loading ? <Spinner size="sm" /> : top ? `${top.cluster_size} sources` : '—'}
                 icon={Target}
-                detail={top ? `Leading cluster: ${top.trend_status ?? 'REGULAR'}` : 'No signal yet'}
+                detail={
+                  loading
+                    ? 'Loading latest cluster…'
+                    : top
+                    ? `Leading cluster: ${top.trend_status ?? 'REGULAR'}`
+                    : 'No signal yet'
+                }
               />
               <TrendFeatureCard
                 title="Traffic Opportunity"
                 value={
-                  trafficOpportunity
-                    ? `High (${Math.round(trafficOpportunity.final_trend_score)})`
-                    : '—'
+                  loading ? (
+                    <Spinner size="sm" />
+                  ) : trafficOpportunity ? (
+                    `High (${Math.round(trafficOpportunity.final_trend_score)})`
+                  ) : (
+                    '—'
+                  )
                 }
                 icon={Flame}
                 detail={
-                  trafficOpportunity
+                  loading
+                    ? 'Scanning trend snapshot…'
+                    : trafficOpportunity
                     ? `Cluster: ${trafficOpportunity.title.slice(0, 32)}${
                         trafficOpportunity.title.length > 32 ? '…' : ''
                       }`
@@ -192,7 +212,9 @@ export default function CompanyDashboard() {
               </Link>
             </div>
             <div className="space-y-4">
-              {trends.length === 0 ? (
+              {loading ? (
+                <SpinnerBlock label="Loading signals" />
+              ) : trends.length === 0 ? (
                 <p className="text-sm text-dim italic">
                   No ranked signals — trigger ingestion + rank to populate the feed.
                 </p>
