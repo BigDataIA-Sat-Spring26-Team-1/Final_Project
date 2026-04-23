@@ -5,12 +5,10 @@ import { Plus, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
 import {
   createUser,
   createCompany,
-  triggerAdminIngestion,
-  type IngestionTriggerResponse,
 } from '@/lib/api';
 
 export function AdminManagementPanel() {
-  const [activeTab, setActiveTab] = useState<'user' | 'company' | 'ingestion'>('user');
+  const [activeTab, setActiveTab] = useState<'user' | 'company'>('user');
 
   // User creation state
   const [userEmail, setUserEmail] = useState('');
@@ -26,11 +24,6 @@ export function AdminManagementPanel() {
   const [companyLoading, setCompanyLoading] = useState(false);
   const [companyError, setCompanyError] = useState<string | null>(null);
   const [companySuccess, setCompanySuccess] = useState(false);
-
-  // Ingestion state
-  const [ingestionLoading, setIngestionLoading] = useState(false);
-  const [ingestionError, setIngestionError] = useState<string | null>(null);
-  const [ingestionSuccess, setIngestionSuccess] = useState<IngestionTriggerResponse | null>(null);
 
   const handleCreateUser = async () => {
     if (!userEmail) {
@@ -79,21 +72,6 @@ export function AdminManagementPanel() {
     }
   };
 
-  const handleTriggerIngestion = async () => {
-    setIngestionLoading(true);
-    setIngestionError(null);
-    setIngestionSuccess(null);
-
-    try {
-      const result = await triggerAdminIngestion();
-      setIngestionSuccess(result);
-    } catch (err) {
-      setIngestionError(err instanceof Error ? err.message : 'Failed to trigger ingestion');
-    } finally {
-      setIngestionLoading(false);
-    }
-  };
-
   const tabClass = (active: boolean) =>
     `px-4 py-2 font-medium transition border-b-2 ${
       active
@@ -117,9 +95,6 @@ export function AdminManagementPanel() {
         </button>
         <button onClick={() => setActiveTab('company')} className={tabClass(activeTab === 'company')}>
           Create Company
-        </button>
-        <button onClick={() => setActiveTab('ingestion')} className={tabClass(activeTab === 'ingestion')}>
-          Trigger Pipeline
         </button>
       </div>
 
@@ -254,65 +229,6 @@ export function AdminManagementPanel() {
           </div>
         )}
 
-        {/* Trigger Ingestion Tab */}
-        {activeTab === 'ingestion' && (
-          <div className="space-y-4">
-            {ingestionError && (
-              <div className="p-4 bg-rose-500/5 border border-rose-500/20 rounded-lg flex items-start gap-3">
-                <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
-                <p className="text-rose-200">{ingestionError}</p>
-              </div>
-            )}
-
-            {ingestionSuccess && (
-              <div className="p-4 bg-emerald-500/5 border border-emerald-500/20 rounded-lg">
-                <div className="flex items-start gap-3">
-                  <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
-                  <div>
-                    <p className="text-emerald-200 font-medium">Pipeline scheduled on Airflow.</p>
-                    <p className="text-emerald-300/90 text-sm mt-1">{ingestionSuccess.message}</p>
-                    {ingestionSuccess.dag_run_id && (
-                      <p className="text-emerald-300/70 text-xs mt-1 font-mono">
-                        {ingestionSuccess.dag_id} · run {ingestionSuccess.dag_run_id}
-                        {ingestionSuccess.state ? ` · ${ingestionSuccess.state}` : ''}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            <div className="p-4 bg-white/5 rounded-lg border border-white/10">
-              <p className="text-sm text-dim mb-4">
-                Trigger the RSS ingestion + URL-level deduplication pipeline. This will:
-              </p>
-              <ul className="list-disc list-inside space-y-2 text-sm text-dim mb-4">
-                <li>Fetch articles from RSS, ArXiv, and HackerNews</li>
-                <li>Normalize URLs and detect duplicates</li>
-                <li>Save new articles to the database</li>
-                <li>Prepare data for the classification pipeline</li>
-              </ul>
-            </div>
-
-            <button
-              onClick={handleTriggerIngestion}
-              disabled={ingestionLoading}
-              className="w-full flex items-center justify-center gap-2 bg-amber-600 hover:bg-amber-700 disabled:bg-amber-400 text-white font-medium py-3 rounded-lg transition text-base"
-            >
-              {ingestionLoading ? (
-                <>
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                  Pipeline running...
-                </>
-              ) : (
-                <>
-                  <Plus className="w-5 h-5" />
-                  Trigger Force Sync
-                </>
-              )}
-            </button>
-          </div>
-        )}
       </div>
     </div>
   );

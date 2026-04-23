@@ -1,10 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Calendar, Loader2, FileText } from 'lucide-react';
-import { getBriefArchive } from '@/lib/api';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Calendar, Loader2, FileText, Plus } from 'lucide-react';
+import { getBriefArchive, generateB2BReport } from '@/lib/api';
 import { CompanySwitcher } from '@/components/CompanySwitcher';
 import type { BriefArchiveItem } from '@/lib/api';
+
+const TODAY = new Date().toISOString().slice(0, 10);
 
 export default function BriefsPage() {
   const [companyId, setCompanyId] = useState<string>(() => {
@@ -18,37 +20,66 @@ export default function BriefsPage() {
   const [briefs, setBriefs] = useState<BriefArchiveItem[]>([]);
   const [selectedBrief, setSelectedBrief] = useState<BriefArchiveItem | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [generationMsg, setGenerationMsg] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (companyId) {
-      sessionStorage.setItem('selectedCompanyId', companyId);
-      fetchBriefs();
-    }
-  }, [companyId, selectedDate]);
-
-  const fetchBriefs = async () => {
+  const fetchBriefs = useCallback(async () => {
     if (!companyId) return;
     setIsLoading(true);
     setError(null);
     try {
       const res = await getBriefArchive(companyId, selectedDate || undefined, 30);
       setBriefs(res.results);
-      if (res.results.length > 0 && !selectedBrief) {
-        setSelectedBrief(res.results[0]);
-      }
+      setSelectedBrief(res.results[0] ?? null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load briefs');
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [companyId, selectedDate]);
+
+  useEffect(() => {
+    if (companyId) {
+      sessionStorage.setItem('selectedCompanyId', companyId);
+      fetchBriefs();
+    } else {
+      setBriefs([]);
+      setSelectedBrief(null);
+    }
+  }, [companyId, fetchBriefs]);
 
   const handleCompanySelect = (newCompanyId: string) => {
     setCompanyId(newCompanyId);
   };
 
-  const today = new Date().toISOString().split('T')[0];
+  const hasToday = useMemo(
+    () => briefs.some(b => b.brief_date === TODAY),
+    [briefs],
+  );
+
+  // Today's brief blocks the generate button — regeneration is disallowed.
+  const generateDisabled = !companyId || isGenerating || isLoading || hasToday;
+
+  const handleGenerate = async () => {
+    if (!companyId || hasToday) return;
+    setIsGenerating(true);
+    setError(null);
+    setGenerationMsg(null);
+    try {
+      const res = await generateB2BReport({ user_id: companyId });
+      setGenerationMsg(
+        res.already_generated
+          ? "Today's brief already exists — fetched from storage."
+          : 'Brief generated successfully.',
+      );
+      await fetchBriefs();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to generate brief');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
 
   // Status badge color mapping
   const getStatusColor = (urgency: string | null) => {
@@ -67,10 +98,41 @@ export default function BriefsPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-8">
       <div className="max-w-6xl mx-auto">
-        <div className="flex items-center justify-between mb-8">
+        <div className="flex items-center justify-between mb-8 gap-4 flex-wrap">
           <h1 className="text-3xl font-bold text-slate-900">Strategic Briefs Archive</h1>
-          <CompanySwitcher currentCompanyId={companyId} onSelect={handleCompanySelect} />
+          <div className="flex items-center gap-3 flex-wrap">
+            <button
+              onClick={handleGenerate}
+              disabled={generateDisabled}
+              title={hasToday ? "Today's brief already exists." : undefined}
+              className="inline-flex items-center gap-2 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:text-slate-500 disabled:cursor-not-allowed text-white px-4 py-2 text-sm font-semibold transition"
+            >
+              {isGenerating ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Generating...
+                </>
+              ) : hasToday ? (
+                <>
+                  <FileText className="w-4 h-4" />
+                  Today&apos;s Brief Ready
+                </>
+              ) : (
+                <>
+                  <Plus className="w-4 h-4" />
+                  Generate Today&apos;s Brief
+                </>
+              )}
+            </button>
+            <CompanySwitcher currentCompanyId={companyId} onSelect={handleCompanySelect} />
+          </div>
         </div>
+
+        {generationMsg && (
+          <div className="p-4 mb-4 bg-blue-50 border border-blue-200 rounded-lg text-blue-900 text-sm">
+            {generationMsg}
+          </div>
+        )}
 
         {!companyId ? (
           <div className="p-6 bg-amber-50 rounded-lg border border-amber-200">
@@ -89,7 +151,7 @@ export default function BriefsPage() {
                 type="date"
                 value={selectedDate}
                 onChange={e => setSelectedDate(e.target.value)}
-                max={today}
+                max={TODAY}
                 className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none mb-4"
               />
 
@@ -123,9 +185,9 @@ export default function BriefsPage() {
                           }`}
                         >
                           <div className="font-medium">
-                            {brief.generated_at
+                            {brief.brief_date || (brief.generated_at
                               ? new Date(brief.generated_at).toLocaleDateString()
-                              : 'Date unknown'}
+                              : 'Date unknown')}
                           </div>
                           {brief.urgency_tier && (
                             <div className="text-xs text-slate-600">
@@ -158,9 +220,9 @@ export default function BriefsPage() {
                   <div className="mb-6 pb-6 border-b border-slate-200">
                     <h2 className="text-2xl font-bold text-slate-900 mb-3">
                       Strategic Brief —{' '}
-                      {selectedBrief.generated_at
+                      {selectedBrief.brief_date || (selectedBrief.generated_at
                         ? new Date(selectedBrief.generated_at).toLocaleDateString()
-                        : 'Date unknown'}
+                        : 'Date unknown')}
                     </h2>
                     {selectedBrief.urgency_tier && (
                       <span className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(selectedBrief.urgency_tier)}`}>

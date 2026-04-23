@@ -181,6 +181,9 @@ class B2BReportResponse(BaseModel):
     user_id: str
     report: str
     status: str
+    already_generated: bool = Field(default=False, description="True when a brief already existed for today and was returned unchanged.")
+    generated_at: Optional[str] = Field(default=None, description="ISO timestamp of the persisted brief, when known.")
+    brief_date: Optional[str] = Field(default=None, description="The business day the brief addresses (YYYY-MM-DD).")
 
 
 # --- Behavioral Refinement Models ---
@@ -212,3 +215,6 @@ class B2CNewsletterResponse(BaseModel):
     status: str
     html_content: str
     execution_path_taken: List[str] = Field(default_factory=list, description="Array plotting the LangGraph nodes triggered natively for UI visibility")
+    already_generated: bool = Field(default=False, description="True when today's newsletter was pulled from Snowflake rather than regenerated.")
+    generated_at: Optional[str] = Field(default=None, description="ISO timestamp of the persisted draft, when known.")
+    edition_date: Optional[str] = Field(default=None, description="Edition date (YYYY-MM-DD) the draft belongs to.")

@@ -1,47 +1,44 @@
 'use client';
 
-// Admin landing page. The four "global" stat cards mostly need a dedicated
-// /admin/stats endpoint that doesn't exist yet — until that lands they read
-// "—" with a clear placeholder label. The two real signals available today
-// are system health (from /api/v1/health) and the top high-velocity clusters
-// (from /api/v1/trend/top), so we show those for real.
+// Admin landing page. Three top-level indicators (users, companies, system
+// status) + the lightweight "Admin Management" tool and the Prometheus
+// metrics panel. Detailed drill-downs live on the dedicated admin pages.
 
 import {
-  AlertCircle,
   Building2,
   ShieldCheck,
-  TrendingUp,
   TriangleAlert,
   Users,
-  Zap,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
-import { ActivityItem, StatCard } from '@/components/DashboardComponents';
+import { StatCard } from '@/components/DashboardComponents';
 import { AdminManagementPanel } from '@/components/AdminManagementPanel';
 import { MetricsPanel } from '@/components/MetricsPanel';
 import { PageWrapper } from '@/components/PageWrapper';
+import { Spinner } from '@/components/Spinner';
 import {
   ApiError,
   getHealth,
-  getTopTrends,
   listCompanies,
   listUsers,
   type HealthResponse,
-  type TrendCluster,
 } from '@/lib/api';
 
 export default function AdminDashboard() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
-  const [trends, setTrends] = useState<TrendCluster[]>([]);
   const [userTotal, setUserTotal] = useState<number | null>(null);
   const [companyTotal, setCompanyTotal] = useState<number | null>(null);
+  const [statsLoading, setStatsLoading] = useState(true);
 
   useEffect(() => {
     const controller = new AbortController();
     Promise.all([
       getHealth(controller.signal).catch((err) => {
+        // Suppress AbortError — fires on strict-mode double mount / navigation
+        // and makes the "Backend unreachable" banner flash for no real reason.
+        if ((err as Error).name === 'AbortError') return null;
         setHealthError(
           err instanceof ApiError
             ? `${err.status}: ${err.detail ?? err.message}`
@@ -49,23 +46,17 @@ export default function AdminDashboard() {
         );
         return null;
       }),
-      getTopTrends(5, undefined, controller.signal).catch(() => null),
       listUsers(1, 0, controller.signal).catch(() => null),
       listCompanies(1, 0, controller.signal).catch(() => null),
-    ]).then(([h, t, u, c]) => {
+    ]).then(([h, u, c]) => {
+      if (controller.signal.aborted) return;
       setHealth(h);
-      if (t) setTrends(t.results);
       if (u) setUserTotal(u.total);
       if (c) setCompanyTotal(c.total);
+      setStatsLoading(false);
     });
     return () => controller.abort();
   }, []);
-
-  const surgingCount = trends.filter((t) =>
-    ['BREAKING', 'TRENDING', 'VIRAL', 'BREAKING-VIRAL'].includes(
-      (t.trend_status ?? '').toUpperCase(),
-    ),
-  ).length;
 
   return (
     <PageWrapper>
@@ -85,32 +76,24 @@ export default function AdminDashboard() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          {/* TODO: wire to /api/v1/admin/users when endpoint lands. */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <StatCard
             title="Total B2C Users"
-            value={userTotal !== null ? String(userTotal) : '—'}
-            change={userTotal !== null ? `+${userTotal}` : '0'}
-            description="Count from /admin/users"
+            value={statsLoading ? <Spinner size="sm" /> : userTotal !== null ? String(userTotal) : '—'}
+            change={userTotal ? `+${userTotal}` : '0'}
+            description="Consumer personas on file"
             icon={Users}
           />
           <StatCard
             title="Total B2B Entities"
-            value={companyTotal !== null ? String(companyTotal) : '—'}
-            change={companyTotal !== null ? `+${companyTotal}` : '0'}
-            description="Count from /admin/companies"
+            value={statsLoading ? <Spinner size="sm" /> : companyTotal !== null ? String(companyTotal) : '—'}
+            change={companyTotal ? `+${companyTotal}` : '0'}
+            description="Corporate tenants in Snowflake"
             icon={Building2}
           />
           <StatCard
-            title="High-Velocity Clusters"
-            value={String(surgingCount)}
-            change={surgingCount > 0 ? `+${surgingCount}` : '0'}
-            description="From the last trend ranking pass"
-            icon={Zap}
-          />
-          <StatCard
             title="System Status"
-            value={health?.status ?? '—'}
+            value={statsLoading ? <Spinner size="sm" /> : health?.status ?? '—'}
             change={health ? '100%' : '0'}
             description={
               health
@@ -124,49 +107,6 @@ export default function AdminDashboard() {
         <AdminManagementPanel />
 
         <MetricsPanel />
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          <div className="space-y-6">
-            <h2 className="text-xl font-bold flex items-center gap-2">
-              <TrendingUp className="w-5 h-5 text-secondary" />
-              High Velocity Clusters
-            </h2>
-            <div className="space-y-4">
-              {trends.length === 0 && (
-                <p className="text-sm text-dim italic">
-                  No ranked clusters yet — trigger ingestion + rank to populate.
-                </p>
-              )}
-              {trends.slice(0, 4).map((t) => (
-                <ActivityItem
-                  key={t.cluster_id}
-                  title={t.title}
-                  source={t.trend_status ?? 'REGULAR'}
-                  time={`${t.cluster_size} sources`}
-                  status={t.trend_status ?? 'QUEUED'}
-                  relevancy={Math.min(100, Math.round(t.final_trend_score))}
-                />
-              ))}
-            </div>
-          </div>
-
-          <div className="space-y-6">
-            <h2 className="text-xl font-bold flex items-center gap-2 text-amber-400">
-              <AlertCircle className="w-5 h-5" />
-              Pending Admin Reviews
-            </h2>
-            <div className="glass rounded-3xl p-6 border border-white/5 space-y-3">
-              <p className="text-sm text-dim italic">
-                Newsletter approval queue requires the
-                <code className="font-mono bg-white/5 mx-1 px-1.5 py-0.5 rounded">
-                  GET /admin/newsletters/pending
-                </code>
-                endpoint, which is on Abhinav&apos;s backlog. UI is wired and ready
-                to consume the response once it ships.
-              </p>
-            </div>
-          </div>
-        </div>
       </div>
     </PageWrapper>
   );

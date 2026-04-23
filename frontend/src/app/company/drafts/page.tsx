@@ -1,183 +1,152 @@
 'use client';
 
-// Enterprise draft cycles — the primary "Generate B2B Intelligence Report"
-// page. Calls the B2B LangGraph with a corporate client id, renders the
-// returned Markdown, and caches it in sessionStorage so sibling pages
-// (/seo, /company, /company/trends) can read the same report without
-// re-paying the LLM latency.
+// Strategic Drafts — the primary brief workspace for a corporate tenant.
+// Auto-loads today's brief on mount. If one already exists we render it and
+// lock the "Generate" action (regeneration is disallowed, same contract as
+// the backend). A date picker below lets analysts jump back into any
+// historical brief from the archive.
 
-import {
-  Brain,
-  Clock,
-  FileText,
-  Loader2,
-  Plus,
-  Settings2,
-  TriangleAlert,
-  Zap,
-} from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { Calendar, FileText, Loader2, Plus, TriangleAlert } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
 
+import { CompanySwitcher } from '@/components/CompanySwitcher';
 import { PageWrapper } from '@/components/PageWrapper';
+import { Spinner } from '@/components/Spinner';
 import {
-  ApiError,
   generateB2BReport,
-  type B2BReportResponse,
+  getBriefArchive,
+  type BriefArchiveItem,
 } from '@/lib/api';
-import {
-  getLastCompanyId,
-  loadReport,
-  saveReport,
-  setLastCompanyId,
-} from '@/lib/b2b-cache';
+import { getLastCompanyId, setLastCompanyId } from '@/lib/b2b-cache';
 import { cn } from '@/lib/utils';
+
+const TODAY = new Date().toISOString().slice(0, 10);
 
 export default function CompanyDraftsPage() {
   const [companyId, setCompanyId] = useState('');
-  const [report, setReport] = useState<B2BReportResponse | null>(null);
-  const [generatedAt, setGeneratedAt] = useState<number | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [briefs, setBriefs] = useState<BriefArchiveItem[]>([]);
+  const [selectedBrief, setSelectedBrief] = useState<BriefArchiveItem | null>(null);
+  const [archiveLoading, setArchiveLoading] = useState(false);
+  const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
-  // Hydrate from cache on mount so returning users see their last report.
+  // Hydrate last-used company id on mount.
   useEffect(() => {
-    const lastId = getLastCompanyId();
-    if (lastId) {
-      setCompanyId(lastId);
-      const cached = loadReport(lastId);
-      if (cached) {
-        setReport(cached.payload);
-        setGeneratedAt(cached.generated_at);
-      }
+    (async () => setCompanyId(getLastCompanyId()))();
+  }, []);
+
+  const fetchArchive = useCallback(async (id: string, signal?: AbortSignal) => {
+    setArchiveLoading(true);
+    setError(null);
+    try {
+      const res = await getBriefArchive(id, undefined, 50, signal);
+      setBriefs(res.results);
+      // Auto-select the newest brief so the reader lands on fresh content.
+      setSelectedBrief(res.results[0] ?? null);
+    } catch (err) {
+      if ((err as Error).name === 'AbortError') return;
+      setError(err instanceof Error ? err.message : 'Failed to load briefs');
+    } finally {
+      setArchiveLoading(false);
     }
   }, []);
 
-  const handleGenerate = async () => {
-    if (!companyId.trim()) {
-      setError('Enter a corporate client id before triggering the agent.');
+  useEffect(() => {
+    if (!companyId) {
+      setBriefs([]);
+      setSelectedBrief(null);
       return;
     }
-    setLoading(true);
+    const controller = new AbortController();
+    setLastCompanyId(companyId);
+    fetchArchive(companyId, controller.signal);
+    return () => controller.abort();
+  }, [companyId, fetchArchive]);
+
+  const hasToday = useMemo(
+    () => briefs.some((b) => b.brief_date === TODAY),
+    [briefs],
+  );
+  const generateDisabled = !companyId || generating || archiveLoading || hasToday;
+
+  const handleGenerate = async () => {
+    if (!companyId || hasToday) return;
+    setGenerating(true);
     setError(null);
+    setNotice(null);
     try {
-      const response = await generateB2BReport({ user_id: companyId.trim() });
-      setReport(response);
-      const now = Date.now();
-      setGeneratedAt(now);
-      saveReport(companyId.trim(), response);
-      setLastCompanyId(companyId.trim());
-    } catch (err) {
-      setError(
-        err instanceof ApiError
-          ? `${err.status}: ${err.detail ?? err.message}`
-          : (err as Error).message,
+      const res = await generateB2BReport({ user_id: companyId });
+      setNotice(
+        res.already_generated
+          ? "Today's brief was already stored — fetched from the archive."
+          : 'Brief generated and saved successfully.',
       );
+      await fetchArchive(companyId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to generate brief');
     } finally {
-      setLoading(false);
+      setGenerating(false);
+    }
+  };
+
+  const statusClass = (urgency: string | null | undefined) => {
+    switch (urgency) {
+      case 'ACT_NOW':
+        return 'bg-red-500/10 text-red-500 border-red-500/20';
+      case 'HIDDEN_GEM':
+        return 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20';
+      case 'MONITOR':
+        return 'bg-amber-500/10 text-amber-500 border-amber-500/20';
+      default:
+        return 'bg-white/5 text-dim border-white/10';
     }
   };
 
   return (
     <PageWrapper>
       <div className="space-y-10">
-        <header className="flex items-end justify-between gap-6 flex-wrap">
+        <header className="flex items-end justify-between gap-4 flex-wrap">
           <div className="space-y-2">
-            <h1 className="text-4xl font-bold tracking-tight">Enterprise Draft Cycles</h1>
-            <p className="text-dim text-lg">Agentic brief generation and editorial review loops.</p>
+            <h1 className="text-4xl font-bold tracking-tight">Strategic Drafts</h1>
+            <p className="text-dim text-lg">
+              Today&apos;s brief is auto-loaded. Flip through past dates on the right.
+            </p>
           </div>
-          <button
-            onClick={handleGenerate}
-            disabled={loading || !companyId}
-            className="bg-primary hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed text-primary-foreground px-8 py-3 rounded-2xl text-sm font-black transition-all flex items-center gap-2 shadow-2xl shadow-primary/20"
-          >
-            {loading ? (
-              <>
-                <Loader2 className="w-5 h-5 animate-spin" /> Generating...
-              </>
-            ) : (
-              <>
-                <Plus className="w-5 h-5" /> Trigger Strategy Agent
-              </>
-            )}
-          </button>
+          <div className="flex items-center gap-3 flex-wrap">
+            <button
+              onClick={handleGenerate}
+              disabled={generateDisabled}
+              title={hasToday ? "Today's brief is already stored." : undefined}
+              className="flex items-center gap-2 bg-primary hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed text-primary-foreground px-6 py-3 rounded-2xl text-sm font-bold transition-all"
+            >
+              {generating ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin" /> Generating…
+                </>
+              ) : hasToday ? (
+                <>
+                  <FileText className="w-5 h-5" /> Today&apos;s Brief Ready
+                </>
+              ) : (
+                <>
+                  <Plus className="w-5 h-5" /> Generate Today&apos;s Brief
+                </>
+              )}
+            </button>
+            <CompanySwitcher
+              currentCompanyId={companyId || null}
+              onSelect={(id) => setCompanyId(id)}
+            />
+          </div>
         </header>
 
-        {/* Corporate client id — the B2B agent keys every retrieval off this. */}
-        <div className="glass rounded-3xl p-6 border border-white/5">
-          <label className="block space-y-2">
-            <span className="text-xs uppercase tracking-widest text-dim font-bold">
-              Corporate Client ID
-            </span>
-            <input
-              type="text"
-              value={companyId}
-              onChange={(e) => setCompanyId(e.target.value)}
-              placeholder="e.g. company-acme-001"
-              className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm outline-none focus:border-primary/40 font-mono"
-            />
-          </label>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-          <div className="glass rounded-[2rem] p-10 border border-white/5 space-y-6 bg-gradient-to-br from-secondary/10 to-transparent">
-            <div className="flex items-center gap-3 text-secondary">
-              <Brain className="w-6 h-6" />
-              <h3 className="font-bold uppercase tracking-widest text-xs">Strategy Context</h3>
-            </div>
-            <div className="space-y-4">
-              <div className="space-y-1">
-                <p className="text-[10px] font-black text-dim uppercase tracking-widest leading-none">
-                  Active Client
-                </p>
-                <p className="text-xl font-bold text-white">{companyId || '— not set —'}</p>
-              </div>
-              <div className="space-y-1">
-                <p className="text-[10px] font-black text-dim uppercase tracking-widest leading-none">
-                  Last Generation
-                </p>
-                <p className="text-xl font-bold text-emerald-400">
-                  {generatedAt ? new Date(generatedAt).toLocaleString() : '—'}
-                </p>
-              </div>
-            </div>
-            <button
-              type="button"
-              title="Future hook — currently reads from backend defaults."
-              className="flex items-center gap-2 text-xs font-bold text-dim hover:text-white transition-colors"
-            >
-              <Settings2 className="w-4 h-4" />
-              Configure Multi-Agent Tuning
-            </button>
+        {notice && (
+          <div className="rounded-2xl border border-blue-500/20 bg-blue-500/5 p-4 text-sm text-blue-200">
+            {notice}
           </div>
-
-          <div className="glass rounded-[2rem] p-10 border border-white/5 flex flex-col items-center justify-center text-center space-y-5">
-            <div
-              className={cn(
-                'w-16 h-16 rounded-full bg-white/5 flex items-center justify-center',
-                loading && 'animate-pulse',
-              )}
-            >
-              <Zap className="w-8 h-8 text-primary/40" />
-            </div>
-            <div className="space-y-1">
-              <h3 className="text-lg font-bold">
-                {loading
-                  ? 'Agent in flight'
-                  : report
-                  ? 'Brief ready'
-                  : 'Awaiting first generation'}
-              </h3>
-              <p className="text-xs text-dim max-w-[240px] leading-relaxed">
-                {loading
-                  ? 'LangGraph is scoring opportunities and drafting the Markdown report.'
-                  : report
-                  ? 'Scroll to view the most recent brief for this client.'
-                  : 'Trigger the agent to produce a cross-cluster intelligence brief.'}
-              </p>
-            </div>
-          </div>
-        </div>
-
+        )}
         {error && (
           <div className="rounded-2xl border border-rose-500/20 bg-rose-500/5 p-6 flex items-start gap-3">
             <TriangleAlert className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
@@ -185,40 +154,128 @@ export default function CompanyDraftsPage() {
           </div>
         )}
 
-        {report && (
-          <div className="space-y-6">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-bold flex items-center gap-2">
-                <Clock className="w-5 h-5 text-secondary" />
-                Latest Brief Output
+        {!companyId ? (
+          <div className="glass rounded-3xl p-10 border border-dashed border-white/20 text-center">
+            <p className="text-dim">Pick a company from the dropdown to load its briefs.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+            <aside className="glass rounded-3xl border border-white/5 p-6 space-y-4 h-fit">
+              <h2 className="text-sm font-black uppercase tracking-widest text-dim flex items-center gap-2">
+                <Calendar className="w-4 h-4" />
+                Brief History
               </h2>
-              <span
-                className={cn(
-                  'px-3 py-1 rounded-full text-[10px] font-black tracking-widest uppercase border',
-                  report.status === 'SUCCESS'
-                    ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
-                    : 'bg-amber-500/10 text-amber-500 border-amber-500/20',
-                )}
-              >
-                {report.status}
-              </span>
-            </div>
+              {archiveLoading ? (
+                <Spinner label="Loading archive" />
+              ) : briefs.length === 0 ? (
+                <p className="text-sm text-dim italic">
+                  No briefs yet. Generate today&apos;s to start the archive.
+                </p>
+              ) : (
+                <ul className="space-y-2">
+                  {briefs.map((b) => (
+                    <li key={b.id}>
+                      <button
+                        onClick={() => setSelectedBrief(b)}
+                        className={cn(
+                          'w-full text-left px-3 py-2 rounded-xl text-sm transition',
+                          selectedBrief?.id === b.id
+                            ? 'bg-primary/10 border border-primary/20 text-white'
+                            : 'hover:bg-white/5 text-dim',
+                        )}
+                      >
+                        <p className="font-mono text-xs">{b.brief_date}</p>
+                        {b.urgency_tier && (
+                          <p className="text-[10px] uppercase tracking-widest text-dim mt-0.5">
+                            {b.urgency_tier.replace(/_/g, ' ')}
+                          </p>
+                        )}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </aside>
 
-            <div className="glass rounded-3xl p-8 border border-white/5 space-y-4">
-              <div className="flex items-center gap-2 text-dim text-xs font-bold uppercase tracking-widest">
-                <FileText className="w-4 h-4" />
-                Markdown Brief · {companyId}
-              </div>
-              {/* Markdown from the agent — rendered as preformatted text. For a
-                  richer render we could drop in react-markdown; keeping it raw
-                  keeps the demo free of extra deps. */}
-              <pre className="whitespace-pre-wrap text-sm leading-relaxed text-white/90 font-mono bg-white/[0.02] rounded-2xl border border-white/10 p-6 max-h-[70vh] overflow-auto">
-                {report.report || 'Empty report — no intelligence signals for this client yet.'}
-              </pre>
+            <div className="lg:col-span-3 glass rounded-3xl border border-white/5 p-8 space-y-6">
+              {archiveLoading && !selectedBrief ? (
+                <Spinner label="Loading latest brief" />
+              ) : !selectedBrief ? (
+                <div className="flex flex-col items-center justify-center py-12 text-dim">
+                  <FileText className="w-12 h-12 mb-4" />
+                  <p>Select a brief from the archive on the left.</p>
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between flex-wrap gap-3 pb-6 border-b border-white/5">
+                    <div>
+                      <h2 className="text-2xl font-bold">Brief · {selectedBrief.brief_date}</h2>
+                      <p className="text-xs text-dim mt-1">
+                        Generated{' '}
+                        {selectedBrief.generated_at
+                          ? new Date(selectedBrief.generated_at).toLocaleString()
+                          : 'at an unknown time'}
+                      </p>
+                    </div>
+                    {selectedBrief.urgency_tier && (
+                      <span
+                        className={cn(
+                          'px-3 py-1 rounded-full text-[10px] font-black tracking-widest uppercase border',
+                          statusClass(selectedBrief.urgency_tier),
+                        )}
+                      >
+                        {selectedBrief.urgency_tier.replace(/_/g, ' ')}
+                      </span>
+                    )}
+                  </div>
+                  {selectedBrief.brief_content ? (
+                    <div className="brief-sections space-y-4 max-h-[70vh] overflow-auto pr-2">
+                      {splitBriefIntoCards(selectedBrief.brief_content).map((section, idx) => (
+                        <article
+                          key={idx}
+                          className="rounded-2xl border border-white/10 bg-white/[0.02] p-6 prose prose-invert max-w-none prose-headings:mt-0 prose-headings:mb-3 prose-p:text-white/80 prose-li:text-white/80 prose-strong:text-white"
+                        >
+                          <ReactMarkdown>{section}</ReactMarkdown>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-dim italic">No content recorded for this brief.</p>
+                  )}
+                </>
+              )}
             </div>
           </div>
         )}
       </div>
     </PageWrapper>
   );
+}
+
+/**
+ * Split the B2B agent's Markdown brief into per-section cards.
+ *
+ * The agent emits a stable set of H1/H2 headings (Executive Intelligence
+ * Briefing, Key Opportunity Signals, Market Trends Overview, Recommended
+ * Actions). Rendering each heading's block as its own card mirrors the
+ * tiled layout in the SEO prototype UI. If the content has no headings
+ * we fall back to a single tile so nothing gets dropped.
+ */
+function splitBriefIntoCards(markdown: string): string[] {
+  const lines = markdown.split('\n');
+  const sections: string[] = [];
+  let current: string[] = [];
+
+  for (const line of lines) {
+    const isHeading = /^#{1,3}\s+/.test(line);
+    if (isHeading && current.length > 0) {
+      sections.push(current.join('\n').trim());
+      current = [line];
+    } else {
+      current.push(line);
+    }
+  }
+  if (current.length > 0) sections.push(current.join('\n').trim());
+
+  return sections.filter((s) => s.length > 0);
 }

@@ -27,9 +27,13 @@ log = logging.getLogger("airflow.task")
 def _load_target_users(conf: Dict[str, Any]) -> List[str]:
     """Resolve the list of user ids to generate newsletters for.
 
-    Explicit ``user_id`` in conf wins. Without it we pull every user that has
-    a persona — no persona, no newsletter.
+    Explicit ``user_id`` in conf wins (and bypasses the "already generated"
+    guard — ad-hoc triggers always get served). Without it we pull every user
+    that has a persona and does NOT yet have a newsletter for today. The API
+    is idempotent per (user_id, edition_date), so skipping is the cheap path.
     """
+    from datetime import date as _date
+
     explicit = conf.get("user_id")
     if explicit:
         return [explicit]
@@ -37,11 +41,24 @@ def _load_target_users(conf: Dict[str, Any]) -> List[str]:
     ensure_backend_on_path()
     from app.db.snowflake import get_db_connection
 
+    today = _date.today().isoformat()
     db_gen = get_db_connection()
     db = next(db_gen)
     try:
         cur = db.cursor()
-        cur.execute("SELECT DISTINCT user_id FROM user_personas")
+        cur.execute(
+            """
+            SELECT DISTINCT p.user_id
+            FROM user_personas p
+            WHERE p.user_id IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM newsletters n
+                  WHERE n.user_id = p.user_id
+                    AND n.edition_date = %s
+              )
+            """,
+            (today,),
+        )
         return [row[0] for row in cur.fetchall() if row[0]]
     finally:
         try:

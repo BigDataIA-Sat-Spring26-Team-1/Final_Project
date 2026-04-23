@@ -113,53 +113,7 @@ describe('Admin Management Panel', () => {
     });
   });
 
-  describe('Trigger Pipeline Tab', () => {
-    it('renders pipeline trigger section', () => {
-      render(<AdminManagementPanel />);
-      const pipelineTab = screen.getByRole('button', { name: /Trigger Pipeline/i });
-      fireEvent.click(pipelineTab);
-
-      expect(screen.getByText(/Fetch articles from RSS/)).toBeInTheDocument();
-    });
-
-    it('triggers ingestion pipeline and shows result', async () => {
-      vi.mocked(api.triggerAdminIngestion).mockResolvedValueOnce({
-        status: 'ACCEPTED',
-        message: 'Pipeline started with 150 articles.',
-        dag_id: 'ingestion_dag',
-        dag_run_id: 'manual__2026-04-21T12:00:00+00:00',
-        state: 'queued',
-      });
-
-      render(<AdminManagementPanel />);
-      const pipelineTab = screen.getByRole('button', { name: /Trigger Pipeline/i });
-      fireEvent.click(pipelineTab);
-
-      const triggerButton = screen.getByRole('button', { name: /Trigger Force Sync/i });
-      fireEvent.click(triggerButton);
-
-      await waitFor(() => {
-        expect(api.triggerAdminIngestion).toHaveBeenCalled();
-        expect(screen.getByText('Pipeline scheduled on Airflow.')).toBeInTheDocument();
-        expect(screen.getByText('Pipeline started with 150 articles.')).toBeInTheDocument();
-      });
-    });
-
-    it('displays error on pipeline failure', async () => {
-      vi.mocked(api.triggerAdminIngestion).mockRejectedValueOnce(
-        new Error('Pipeline already running'),
-      );
-
-      render(<AdminManagementPanel />);
-      const pipelineTab = screen.getByRole('button', { name: /Trigger Pipeline/i });
-      fireEvent.click(pipelineTab);
-
-      const triggerButton = screen.getByRole('button', { name: /Trigger Force Sync/i });
-      fireEvent.click(triggerButton);
-
-      await waitFor(() => {
-        expect(screen.getByText('Pipeline already running')).toBeInTheDocument();
-      });
-    });
-  });
+  // Trigger-pipeline tab was removed from the admin management panel — the
+  // global ingestion hand-off now lives on /admin/newsletters where it reads
+  // more naturally next to the archive.
 });
