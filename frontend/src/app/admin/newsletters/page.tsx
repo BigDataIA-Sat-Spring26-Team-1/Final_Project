@@ -183,7 +183,7 @@ function B2CArchive() {
 
   return (
     <div className="space-y-6">
-      <div className="glass rounded-3xl p-6 border border-white/5 flex items-center gap-4 flex-wrap">
+      <div className="glass rounded-3xl p-6 border border-white/5 flex items-center gap-4 flex-wrap relative z-[60] overflow-visible">
         <Mail className="w-5 h-5 text-secondary" />
         <span className="text-sm font-bold">Select a user</span>
         <UserSwitcher currentUserId={userId || null} onSelect={(id) => setUserId(id)} />
@@ -351,7 +351,7 @@ function B2BArchive() {
 
   return (
     <div className="space-y-6">
-      <div className="glass rounded-3xl p-6 border border-white/5 flex items-center gap-4 flex-wrap">
+      <div className="glass rounded-3xl p-6 border border-white/5 flex items-center gap-4 flex-wrap relative z-[60] overflow-visible">
         <FileText className="w-5 h-5 text-secondary" />
         <span className="text-sm font-bold">Select a company</span>
         <CompanySwitcher currentCompanyId={companyId || null} onSelect={(id) => setCompanyId(id)} />

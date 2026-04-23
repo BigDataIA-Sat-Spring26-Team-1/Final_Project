@@ -153,17 +153,21 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   const parsed = rawText ? tryParseJson(rawText) : undefined;
 
   if (!res.ok) {
+    // Prefer non-null, non-undefined values. Our backend's ErrorResponse shape
+    // sends { status, message, detail } — when `detail` is null the helpful
+    // text is on `message`. Without this guard we'd render the literal string
+    // "null" in the UI.
+    const pickString = (v: unknown): string | null => {
+      if (typeof v === 'string' && v.trim().length > 0) return v;
+      return null;
+    };
+    const bag =
+      typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : null;
     const detail =
-      typeof parsed === 'object' && parsed !== null && 'detail' in parsed
-        ? String((parsed as { detail: unknown }).detail)
-        : typeof parsed === 'object' && parsed !== null && 'message' in parsed
-        ? String((parsed as { message: unknown }).message)
-        : rawText;
-    throw new ApiError(
-      `API ${res.status} on ${path}`,
-      res.status,
-      detail || undefined,
-    );
+      (bag && (pickString(bag.detail) || pickString(bag.message))) ||
+      pickString(rawText) ||
+      undefined;
+    throw new ApiError(`API ${res.status} on ${path}`, res.status, detail);
   }
 
   return parsed as T;

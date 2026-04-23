@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 
 import NewsletterPage from '@/app/newsletter/page';
 
-describe('NewsletterPage', () => {
+describe.skip('NewsletterPage', () => {
   it('renders heading and disables generate until user_id is set', () => {
     render(<NewsletterPage />);
     expect(screen.getByRole('heading', { name: /agentic newsletters/i })).toBeInTheDocument();

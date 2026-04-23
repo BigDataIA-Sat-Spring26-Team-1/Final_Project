@@ -1,24 +1,28 @@
 'use client';
 
-// Persona dashboard. Reads the user's explicit + behavioral weights from the
-// backend and renders them side by side so the user can see how their
-// onboarding profile has drifted as they've liked / disliked content.
+// Persona dashboard. Reads from /auth/me to know which user we're editing —
+// no manual id input. The "Update Interests" button is a toggle: clicking it
+// switches the page into edit mode (bio becomes editable, chips become
+// selectable), and clicking "Save Interests" commits both to Snowflake in
+// one shot.
 
-import { CheckCircle2, Loader2, RefreshCw, Save, TriangleAlert } from 'lucide-react';
+import { CheckCircle2, Loader2, Pencil, Save, TriangleAlert, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { PageWrapper } from '@/components/PageWrapper';
+import { useAuth } from '@/components/AuthProvider';
 import {
   ApiError,
   getPersona,
   updatePersonaCategories,
+  updateUserProfile,
   type StoredPersona,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 // Hardcoded taxonomy — mirrors the onboarding manual flow. The classification
-// DAG writes values into this same namespace, so everything the user picks here
-// lines up with how articles are tagged downstream.
+// DAG writes values into this same namespace, so everything the user picks
+// here lines up with how articles are tagged downstream.
 const CATEGORY_OPTIONS: string[] = [
   'llms',
   'ai_agents',
@@ -32,27 +36,21 @@ const CATEGORY_OPTIONS: string[] = [
   'startups',
 ];
 
-// Lightweight "remember last used id" — sessionStorage keeps it per-tab so
-// multiple demo windows don't collide. Swap for real auth when available.
-const STORAGE_KEY = 'curateai:user_id';
-
 export default function UserPersonaPage() {
-  const [userId, setUserId] = useState('');
+  const { user } = useAuth();
+  const userId = user?.id ?? '';
+
   const [persona, setPersona] = useState<StoredPersona | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // `selectedCategories` is the currently staged set, seeded from the user's
-  // explicit weights and editable via the chip grid below.
+  // Edit state is off by default — the page is read-only until the user
+  // clicks "Update Interests". Clicking again (the save button) commits.
+  const [editing, setEditing] = useState(false);
   const [selectedCategories, setSelectedCategories] = useState<Set<string>>(new Set());
+  const [bioDraft, setBioDraft] = useState('');
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
-
-  // Restore the last-used id on mount so page refreshes don't wipe context.
-  useEffect(() => {
-    const saved = typeof window !== 'undefined' ? sessionStorage.getItem(STORAGE_KEY) : null;
-    if (saved) setUserId(saved);
-  }, []);
 
   const loadPersona = useCallback(async (id: string, signal?: AbortSignal) => {
     setLoading(true);
@@ -60,7 +58,6 @@ export default function UserPersonaPage() {
     try {
       const data = await getPersona(id, signal);
       setPersona(data);
-      sessionStorage.setItem(STORAGE_KEY, id);
     } catch (err) {
       if ((err as Error).name === 'AbortError') return;
       setPersona(null);
@@ -76,7 +73,6 @@ export default function UserPersonaPage() {
     }
   }, []);
 
-  // Auto-load whenever userId is set (on mount or after rehydration).
   useEffect(() => {
     if (!userId) return;
     const controller = new AbortController();
@@ -84,17 +80,19 @@ export default function UserPersonaPage() {
     return () => controller.abort();
   }, [userId, loadPersona]);
 
-  // Seed the selection set whenever the persona loads, so checkboxes reflect
-  // what's currently in Snowflake.
+  // Seed the editable state whenever the persona loads.
   useEffect(() => {
     if (!persona) {
       setSelectedCategories(new Set());
+      setBioDraft('');
       return;
     }
     setSelectedCategories(new Set(Object.keys(persona.explicit_category_weights || {})));
+    setBioDraft(persona.bio_summary || '');
   }, [persona]);
 
   const toggleCategory = (cat: string) => {
+    if (!editing) return;
     setSelectedCategories((prev) => {
       const next = new Set(prev);
       if (next.has(cat)) {
@@ -107,25 +105,51 @@ export default function UserPersonaPage() {
     setSavedMsg(null);
   };
 
-  const handleSaveCategories = async () => {
+  const handleToggleEdit = () => {
+    if (!editing) {
+      setEditing(true);
+      setSavedMsg(null);
+      setError(null);
+      return;
+    }
+    // `editing` was true → commit.
+    void handleSave();
+  };
+
+  const handleCancel = () => {
+    if (persona) {
+      setSelectedCategories(new Set(Object.keys(persona.explicit_category_weights || {})));
+      setBioDraft(persona.bio_summary || '');
+    }
+    setEditing(false);
+    setSavedMsg(null);
+    setError(null);
+  };
+
+  const handleSave = async () => {
     if (!userId) return;
     setSaving(true);
     setError(null);
     setSavedMsg(null);
     try {
-      // Equal weights across picks (1/N) — keeps the math simple and the
-      // behavioral layer can still skew the ranking over time.
       const picks = Array.from(selectedCategories);
       const weight = picks.length ? 1 / picks.length : 0;
       const payload: Record<string, number> = {};
       picks.forEach((p) => {
         payload[p] = Number(weight.toFixed(4));
       });
+      // Commit bio first so a category-save failure doesn't leave the bio
+      // dirty; then the category weights. Both go to the admin surface which
+      // the backend trusts on a Bearer token.
+      if (bioDraft.trim() !== (persona?.bio_summary || '').trim()) {
+        await updateUserProfile(userId, undefined, undefined, undefined, bioDraft.trim() || undefined);
+      }
       await updatePersonaCategories(userId, payload);
-      setSavedMsg('Persona updated — new feed will reflect these picks next run.');
+      setSavedMsg('Profile updated — your feed will reflect the new interests on the next run.');
+      setEditing(false);
       await loadPersona(userId);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save categories');
+      setError(err instanceof ApiError ? err.detail ?? err.message : (err as Error).message);
     } finally {
       setSaving(false);
     }
@@ -157,28 +181,6 @@ export default function UserPersonaPage() {
               {persona?.job_title ? ` for ${persona.job_title}` : ''}.
             </p>
           </div>
-
-          <div className="flex items-center gap-3">
-            <input
-              type="text"
-              placeholder="user id"
-              value={userId}
-              onChange={(e) => setUserId(e.target.value)}
-              className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm outline-none focus:border-primary/40 font-mono"
-            />
-            <button
-              onClick={() => userId && loadPersona(userId)}
-              disabled={!userId || loading}
-              className="bg-primary hover:bg-primary/90 disabled:opacity-40 text-primary-foreground px-6 py-3 rounded-2xl text-sm font-bold transition-all flex items-center gap-2"
-            >
-              {loading ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <RefreshCw className="w-4 h-4" />
-              )}
-              {loading ? 'Loading...' : 'Refresh'}
-            </button>
-          </div>
         </header>
 
         {error && (
@@ -194,7 +196,9 @@ export default function UserPersonaPage() {
               <div className="space-y-2">
                 <h3 className="text-2xl font-bold">Dynamic Persona Logic</h3>
                 <p className="text-sm text-dim">
-                  Your persona is automatically evolved based on search intent and article interactions.
+                  Explicit weights come from onboarding (LinkedIn PDF extraction or the manual
+                  picker). Interest clusters are the highest-weighted categories from the same
+                  source — they drive your personalized article ranking.
                 </p>
               </div>
 
@@ -204,7 +208,9 @@ export default function UserPersonaPage() {
                     Explicit Category Weights
                   </h4>
                   <div className="space-y-3">
-                    {persona ? (
+                    {loading ? (
+                      <EmptyHint loading hint="" />
+                    ) : persona ? (
                       Object.entries(persona.explicit_category_weights)
                         .sort(([, a], [, b]) => b - a)
                         .slice(0, 5)
@@ -246,8 +252,8 @@ export default function UserPersonaPage() {
             <div className="glass rounded-[2rem] p-10 border border-white/5 space-y-4">
               <h3 className="text-xl font-bold">Behavioral Refinement</h3>
               <p className="text-sm text-dim">
-                Weights learned from your like / dislike / skip feedback. These layer on top of the
-                onboarding profile.
+                Weights learned from your like / dislike / skip feedback. These layer on top of
+                the onboarding profile.
               </p>
               {persona ? (
                 topBehavioral.length === 0 ? (
@@ -277,42 +283,81 @@ export default function UserPersonaPage() {
 
           <div className="space-y-6">
             <div className="glass rounded-3xl p-8 border border-white/5 space-y-4">
-              <div>
-                <h3 className="text-lg font-bold">Update Interests</h3>
-                <p className="text-xs text-dim mt-1">
-                  Tick the categories that match what you want to read. Weights are normalised
-                  evenly across your picks.
-                </p>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-lg font-bold">Your Profile</h3>
+                  <p className="text-xs text-dim mt-1">
+                    Click <em>Update Interests</em> to edit your bio and category picks. Click
+                    again to save.
+                  </p>
+                </div>
+                {editing && (
+                  <button
+                    type="button"
+                    onClick={handleCancel}
+                    disabled={saving}
+                    title="Cancel without saving"
+                    className="p-2 rounded-xl text-dim hover:text-white hover:bg-white/5 transition"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
               </div>
 
-              <div className="flex flex-wrap gap-2">
-                {CATEGORY_OPTIONS.map((cat) => {
-                  const active = selectedCategories.has(cat);
-                  return (
-                    <button
-                      key={cat}
-                      type="button"
-                      onClick={() => toggleCategory(cat)}
-                      className={cn(
-                        'px-3 py-1.5 rounded-xl border text-xs font-bold transition-all uppercase',
-                        active
-                          ? 'bg-primary/10 text-primary border-primary/30'
-                          : 'bg-white/5 text-dim border-white/10 hover:border-white/20',
-                      )}
-                    >
-                      {humanize(cat)}
-                    </button>
-                  );
-                })}
+              <label className="space-y-1.5 block">
+                <span className="text-[10px] font-black uppercase tracking-widest text-dim">Bio</span>
+                <textarea
+                  value={bioDraft}
+                  onChange={(e) => setBioDraft(e.target.value)}
+                  disabled={!editing || saving}
+                  rows={4}
+                  placeholder="A short professional summary"
+                  className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm outline-none focus:border-primary/40 disabled:opacity-70 disabled:cursor-not-allowed"
+                />
+              </label>
+
+              <div className="space-y-2">
+                <span className="text-[10px] font-black uppercase tracking-widest text-dim">
+                  Interest Categories
+                </span>
+                <div className="flex flex-wrap gap-2">
+                  {CATEGORY_OPTIONS.map((cat) => {
+                    const active = selectedCategories.has(cat);
+                    return (
+                      <button
+                        key={cat}
+                        type="button"
+                        onClick={() => toggleCategory(cat)}
+                        disabled={!editing || saving}
+                        className={cn(
+                          'px-3 py-1.5 rounded-xl border text-xs font-bold transition-all uppercase',
+                          active
+                            ? 'bg-primary/10 text-primary border-primary/30'
+                            : 'bg-white/5 text-dim border-white/10 hover:border-white/20',
+                          !editing && 'cursor-default opacity-80',
+                          editing && !saving && 'cursor-pointer',
+                        )}
+                      >
+                        {humanize(cat)}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
               <button
-                onClick={handleSaveCategories}
-                disabled={!userId || saving}
+                onClick={handleToggleEdit}
+                disabled={!userId || saving || (!persona && !editing)}
                 className="w-full flex items-center justify-center gap-2 bg-primary hover:bg-primary/90 disabled:opacity-40 text-primary-foreground px-4 py-2.5 rounded-xl text-sm font-bold transition-all"
               >
-                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                {saving ? 'Saving…' : 'Save Interests'}
+                {saving ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : editing ? (
+                  <Save className="w-4 h-4" />
+                ) : (
+                  <Pencil className="w-4 h-4" />
+                )}
+                {saving ? 'Saving…' : editing ? 'Save Changes' : 'Update Interests'}
               </button>
 
               {savedMsg && (
@@ -323,15 +368,16 @@ export default function UserPersonaPage() {
               )}
             </div>
 
-            {persona?.bio_summary && (
+            {persona?.persona_archetype && (
               <div className="glass rounded-3xl p-8 border border-white/5 space-y-3">
-                <h3 className="text-lg font-bold">Bio</h3>
-                <p className="text-sm text-dim leading-relaxed">{persona.bio_summary}</p>
-                {persona.persona_archetype && (
-                  <p className="text-[10px] font-mono uppercase tracking-widest text-primary">
-                    {persona.persona_archetype}
-                  </p>
-                )}
+                <h3 className="text-lg font-bold">Archetype</h3>
+                <p className="text-xs font-mono uppercase tracking-widest text-primary">
+                  {persona.persona_archetype}
+                </p>
+                <p className="text-xs text-dim leading-relaxed">
+                  Assigned during onboarding. Swapping interests above won&apos;t re-tag the
+                  archetype; re-run onboarding if your core role changes.
+                </p>
               </div>
             )}
           </div>
@@ -361,9 +407,5 @@ function RoleItem({ title, score }: { title: string; score: number }) {
 }
 
 function EmptyHint({ loading, hint }: { loading: boolean; hint: string }) {
-  return (
-    <p className="text-xs text-dim italic">
-      {loading ? 'Loading...' : hint}
-    </p>
-  );
+  return <p className="text-xs text-dim italic">{loading ? 'Loading...' : hint}</p>;
 }
