@@ -2,6 +2,9 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
+import { AuthProvider } from "@/components/AuthProvider";
+import { AppShell } from "@/components/AppShell";
+
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
@@ -12,11 +15,10 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-import { Navigation } from "@/components/Navigation";
-
 export const metadata: Metadata = {
-  title: "CurateAI | Intelligence Console",
-  description: "Real-time content intelligence and agentic curation",
+  title: "CurateAI | Content Intelligence Platform",
+  description:
+    "Personalized tech newsletters for every professional and AI-driven SEO briefs for every enterprise — powered by real-time content intelligence.",
 };
 
 export default function RootLayout({
@@ -30,12 +32,9 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full bg-background text-foreground selection:bg-primary/30">
-        <Navigation />
-        <main className="pl-64 min-h-screen">
-          <div className="max-w-[1600px] mx-auto p-8 lg:p-12">
-            {children}
-          </div>
-        </main>
+        <AuthProvider>
+          <AppShell>{children}</AppShell>
+        </AuthProvider>
       </body>
     </html>
   );

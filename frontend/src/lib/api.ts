@@ -23,6 +23,61 @@
 export const API_BASE_URL: string =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '') ?? 'http://localhost:8000';
 
+// ---- Auth token storage + idle expiry ---------------------------------------
+// We stash the JWT in localStorage so the token survives a tab reload. Every
+// authenticated request bumps `curateai:last_activity`; when the page next
+// loads, anything older than IDLE_EXPIRY_MS is purged. This gives us
+// "expires after N hours of inactivity" with zero server state.
+const TOKEN_KEY = 'curateai:token';
+const ACTIVITY_KEY = 'curateai:last_activity';
+const IDLE_EXPIRY_MS = 4 * 60 * 60 * 1000; // 4h
+
+function readStorage(key: string): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStorage(key: string, value: string | null): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (value === null) {
+      window.localStorage.removeItem(key);
+    } else {
+      window.localStorage.setItem(key, value);
+    }
+  } catch {
+    // Safari private-mode etc. — failing silently is the least bad option
+    // for an optional cache.
+  }
+}
+
+export function getAuthToken(): string | null {
+  const last = Number(readStorage(ACTIVITY_KEY) || 0);
+  if (last && Date.now() - last > IDLE_EXPIRY_MS) {
+    clearAuthToken();
+    return null;
+  }
+  return readStorage(TOKEN_KEY);
+}
+
+export function setAuthToken(token: string): void {
+  writeStorage(TOKEN_KEY, token);
+  writeStorage(ACTIVITY_KEY, String(Date.now()));
+}
+
+export function clearAuthToken(): void {
+  writeStorage(TOKEN_KEY, null);
+  writeStorage(ACTIVITY_KEY, null);
+}
+
+function bumpActivity(): void {
+  writeStorage(ACTIVITY_KEY, String(Date.now()));
+}
+
 // ---- Error type -------------------------------------------------------------
 /**
  * Thrown for any non-2xx response. Callers can `instanceof ApiError` to branch
@@ -65,9 +120,11 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
   // FormData sets its own Content-Type (including the multipart boundary), so
   // we only set application/json when sending a JSON body.
+  const token = getAuthToken();
   const finalHeaders: HeadersInit = {
     Accept: 'application/json',
     ...(json !== undefined && !formData ? { 'Content-Type': 'application/json' } : {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(headers ?? {}),
   };
 
@@ -77,6 +134,15 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     body: formData ?? (json !== undefined ? JSON.stringify(json) : undefined),
     signal,
   });
+
+  // A successful round-trip (even a 4xx) means the tab is active — bump the
+  // idle counter so short 4h windows aren't clipped by read-only browsing.
+  if (token) bumpActivity();
+
+  // Token rejected? Drop it so the next page render routes to /login.
+  if (res.status === 401 && token) {
+    clearAuthToken();
+  }
 
   // 204 No Content is perfectly valid — don't try to parse an empty body.
   if (res.status === 204) {
@@ -847,6 +913,68 @@ export function getBriefArchive(
 export function triggerAdminIngestion(signal?: AbortSignal): Promise<DAGTriggerResponse> {
   return request<DAGTriggerResponse>('/api/v1/admin/ingestion/trigger', {
     method: 'POST',
+    signal,
+  });
+}
+
+
+// ============================================================================
+// Authentication
+// ============================================================================
+
+export type AuthRole = 'ADMIN' | 'USER' | 'COMPANY';
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  full_name: string | null;
+  role: AuthRole;
+  company_id: string | null;
+}
+
+export interface AuthEnvelope {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  user: AuthUser;
+}
+
+export interface SignupPayload {
+  email: string;
+  password: string;
+  full_name: string;
+  role: 'USER' | 'COMPANY';
+  company_name?: string;
+  company_domain?: string;
+  company_industry?: string;
+}
+
+export function signupAccount(
+  payload: SignupPayload,
+  signal?: AbortSignal,
+): Promise<AuthEnvelope> {
+  return request<AuthEnvelope>('/api/v1/auth/signup', {
+    method: 'POST',
+    json: payload,
+    signal,
+  });
+}
+
+export function loginAccount(
+  email: string,
+  password: string,
+  signal?: AbortSignal,
+): Promise<AuthEnvelope> {
+  return request<AuthEnvelope>('/api/v1/auth/login', {
+    method: 'POST',
+    json: { email, password },
+    signal,
+  });
+}
+
+export function getCurrentUser(signal?: AbortSignal): Promise<AuthUser> {
+  return request<AuthUser>('/api/v1/auth/me', {
+    method: 'GET',
     signal,
   });
 }
