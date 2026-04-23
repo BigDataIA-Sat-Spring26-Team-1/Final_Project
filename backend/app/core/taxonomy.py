@@ -1,6 +1,5 @@
 from typing import Dict
 
-# Taxonomy mapping Axiomatic Keywords to Multi-Label Weights
 AXIOMATIC_TAXONOMY: Dict[str, Dict[str, float]] = {
     "llm": {"llms": 0.9, "general_ai": 0.6},
     "openai": {"llms": 1.0, "general_ai": 0.5},
@@ -58,16 +57,13 @@ AXIOMATIC_TAXONOMY: Dict[str, Dict[str, float]] = {
 }
 
 def get_axiomatic_weights(text: str) -> Dict[str, float]:
-    """
-    Scans text for axiomatic keywords and returns aggregated weights.
-    """
+   
     clean_text = text.lower()
     final_weights = {}
     
     for kw, weights in AXIOMATIC_TAXONOMY.items():
         if kw in clean_text:
             for cat, val in weights.items():
-                # We take the max if multiple keywords hit the same category
                 final_weights[cat] = max(final_weights.get(cat, 0.0), val)
                 
     return final_weights
