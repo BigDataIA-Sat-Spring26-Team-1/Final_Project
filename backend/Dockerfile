@@ -44,6 +44,12 @@ COPY pyproject.toml uv.lock ./
 # silently shipping unpinned versions.
 RUN uv sync --frozen --no-dev --no-install-project
 
+# SpaCy's English small model is a ~12 MB wheel that ships separately from
+# the spacy package; pull it here so the keyword-velocity endpoint works in
+# Cloud Run. Kept inside the builder stage so the final runtime image only
+# carries the installed venv, not the spaCy wheel downloader's HTTP cache.
+RUN uv run python -m spacy download en_core_web_sm
+
 # Now layer in the application itself. Kept separate so iterating on app code
 # doesn't invalidate the (expensive) dependency layer above.
 COPY app/ ./app/
