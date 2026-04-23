@@ -31,7 +31,11 @@ substitutions:
   # Keep the deployed frontend URL as the default — otherwise every rebuild
   # resets CORS_ORIGINS to localhost-only and breaks the production browser.
   # Override via --substitutions for ad-hoc local testing.
-  _CORS_ORIGINS: https://curateai-frontend-sjhg7huf4q-uc.a.run.app,http://localhost:3000
+  # Cloud Run assigns each service TWO public URLs — a hash-based one
+  # (…-sjhg7huf4q-uc.a.run.app) and a project-number one
+  # (…-1013023010679.us-central1.run.app). Browsers land on whichever the
+  # user typed; both must be in the CORS allow-list or the preflight fails.
+  _CORS_ORIGINS: https://curateai-frontend-sjhg7huf4q-uc.a.run.app,https://curateai-frontend-1013023010679.us-central1.run.app,http://localhost:3000
 
   # Non-sensitive Snowflake identifiers. Change here (or via --substitutions)
   # when you move to a new warehouse / database.
