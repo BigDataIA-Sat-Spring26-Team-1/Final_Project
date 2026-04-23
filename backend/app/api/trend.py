@@ -93,34 +93,49 @@ async def get_top_trends(
     target_day = date or _date.today().isoformat()
     prev_day = (_date.fromisoformat(target_day) - timedelta(days=1)).isoformat()
 
+    # LEFT JOIN the first article in each cluster so the UI can link out to a
+    # real source URL (and show the source name). Using QUALIFY to pick the
+    # earliest article per cluster keeps the join deterministic even when a
+    # cluster spans multiple sources.
     query = """
-        SELECT id,
-               primary_title,
-               primary_summary,
-               trend_status,
-               final_trend_score,
-               cluster_size,
-               social_popularity_score,
-               category_weights,
-               created_at
-        FROM article_clusters
-        WHERE final_trend_score IS NOT NULL
+        SELECT c.id,
+               c.primary_title,
+               c.primary_summary,
+               c.trend_status,
+               c.final_trend_score,
+               c.cluster_size,
+               c.social_popularity_score,
+               c.category_weights,
+               c.created_at,
+               a.url AS representative_url,
+               a.source_name AS representative_source
+        FROM article_clusters c
+        LEFT JOIN (
+            SELECT cluster_id, url, source_name,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY cluster_id
+                       ORDER BY published_at DESC NULLS LAST, fetched_at DESC
+                   ) AS rn
+            FROM articles_raw
+            WHERE cluster_id IS NOT NULL
+        ) a ON a.cluster_id = c.id AND a.rn = 1
+        WHERE c.final_trend_score IS NOT NULL
     """
     params: List[Any] = []
     if status:
-        query += " AND UPPER(trend_status) = UPPER(%s)"
+        query += " AND UPPER(c.trend_status) = UPPER(%s)"
         params.append(status)
     if date:
         # created_at is a TIMESTAMP_NTZ; cast to DATE for an index-friendly compare.
-        query += " AND CAST(created_at AS DATE) = %s"
+        query += " AND CAST(c.created_at AS DATE) = %s"
         params.append(date)
     # When a caller pins a date we want the highest-score clusters of that day
     # first; with no date filter we bubble up the newest clusters (then score
     # as a tiebreaker within the same batch).
     if date:
-        query += " ORDER BY final_trend_score DESC NULLS LAST LIMIT %s"
+        query += " ORDER BY c.final_trend_score DESC, c.cluster_size DESC NULLS LAST LIMIT %s"
     else:
-        query += " ORDER BY created_at DESC, final_trend_score DESC NULLS LAST LIMIT %s"
+        query += " ORDER BY c.created_at DESC, c.final_trend_score DESC NULLS LAST LIMIT %s"
     params.append(limit)
 
     # One try/except around the entire "read + serialise" path. Previously the
@@ -186,6 +201,8 @@ async def get_top_trends(
                     "created_at": created_iso,
                     "curr_day_count": curr_counts.get(r["id"], 0),
                     "prev_day_count": prev_counts.get(r["id"], 0),
+                    "url": r.get("representative_url"),
+                    "source_name": r.get("representative_source"),
                 }
             )
     except Exception as e:

@@ -220,6 +220,10 @@ export interface RankedArticle {
   summary?: string;
   /** Source URL of the representative article in the cluster. */
   url?: string;
+  /** Publishers contributing to this cluster (from the Qdrant payload). */
+  sources?: string[];
+  /** Short human-readable source name (populated by the trend snapshot). */
+  source_name?: string | null;
   score: number;
   cluster_size?: number;
   categories?: Record<string, number>;
@@ -257,6 +261,10 @@ export interface TrendCluster {
   curr_day_count: number;
   /** Articles that rolled into this cluster the day before. */
   prev_day_count: number;
+  /** Representative source article URL (LEFT JOINed from articles_raw). */
+  url?: string | null;
+  /** Representative source name. */
+  source_name?: string | null;
 }
 
 export interface TrendTopResponse {

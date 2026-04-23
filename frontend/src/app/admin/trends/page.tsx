@@ -33,6 +33,8 @@ type Row = {
   deltaPct: number;
   isNegative: boolean;
   createdAt: string | null;
+  url?: string | null;
+  sourceName?: string | null;
 };
 
 // Default the trend view to yesterday so the admin sees the most recent
@@ -105,6 +107,8 @@ export default function AdminTrendsPage() {
           deltaPct,
           isNegative: deltaPct < 0,
           createdAt: t.created_at,
+          url: t.url,
+          sourceName: t.source_name,
         };
       }),
     [trends],
@@ -181,7 +185,7 @@ export default function AdminTrendsPage() {
                   type="date"
                   value={date}
                   onChange={(e) => setDate(e.target.value)}
-                  max={new Date().toISOString().slice(0, 10)}
+                  max={yesterdayIso()}
                   className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs outline-none focus:border-primary/40 font-mono"
                 />
                 {date && (
@@ -249,10 +253,24 @@ function TrendRow({ row }: { row: Row }) {
   return (
     <tr className="hover:bg-white/[0.02] transition-colors group">
       <td className="px-8 py-6">
-        <p className="font-bold text-white group-hover:text-primary transition-colors">
-          {truncate(row.name, 56)}
+        {row.url ? (
+          <a
+            href={row.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-bold text-white group-hover:text-primary hover:underline transition-colors block"
+            title="Open the representative source article"
+          >
+            {truncate(row.name, 56)}
+          </a>
+        ) : (
+          <p className="font-bold text-white group-hover:text-primary transition-colors">
+            {truncate(row.name, 56)}
+          </p>
+        )}
+        <p className="text-xs text-dim">
+          {row.sourceName ? `${row.sourceName} · ${row.sub}` : row.sub}
         </p>
-        <p className="text-xs text-dim">{row.sub}</p>
       </td>
       <td className="px-8 py-6 text-xs text-dim font-mono whitespace-nowrap">
         {formatDate(row.createdAt)}
