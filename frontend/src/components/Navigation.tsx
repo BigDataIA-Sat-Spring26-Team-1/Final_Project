@@ -77,12 +77,12 @@ export function Navigation() {
   // Probe persona existence for the active user so we can disable the
   // Onboarding link when the account is already set up. 404 → no persona.
   useEffect(() => {
-    if (!globalUserId) {
-      setActiveUserHasPersona(null);
-      return;
-    }
     const controller = new AbortController();
     (async () => {
+      if (!globalUserId) {
+        setActiveUserHasPersona(null);
+        return;
+      }
       try {
         await getPersona(globalUserId, controller.signal);
         if (!controller.signal.aborted) setActiveUserHasPersona(true);
