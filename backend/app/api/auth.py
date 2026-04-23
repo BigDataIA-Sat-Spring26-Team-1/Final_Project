@@ -87,6 +87,7 @@ class AuthUser(BaseModel):
     full_name: Optional[str] = None
     role: str
     company_id: Optional[str] = None
+    company_name: Optional[str] = None
 
 
 class AuthEnvelope(BaseModel):
@@ -120,7 +121,12 @@ def get_current_user(
 
     cur = db.cursor()
     cur.execute(
-        "SELECT id, email, full_name, role, company_id FROM users WHERE id = %s",
+        """
+        SELECT u.id, u.email, u.full_name, u.role, u.company_id, c.name
+        FROM users u
+        LEFT JOIN companies c ON c.id = u.company_id
+        WHERE u.id = %s
+        """,
         (user_id,),
     )
     row = cur.fetchone()
@@ -133,6 +139,7 @@ def get_current_user(
         full_name=row[2],
         role=(row[3] or "USER").upper(),
         company_id=row[4],
+        company_name=row[5],
     )
 
 
@@ -154,9 +161,14 @@ def require_role(*roles: str):
 # ---------------------------------------------------------------------------
 
 
-def _envelope(row: Any) -> AuthEnvelope:
+def _envelope(row: Any, company_name: Optional[str] = None) -> AuthEnvelope:
     user = AuthUser(
-        id=row[0], email=row[1], full_name=row[2], role=row[3], company_id=row[4]
+        id=row[0],
+        email=row[1],
+        full_name=row[2],
+        role=row[3],
+        company_id=row[4],
+        company_name=company_name,
     )
     token = issue_token(user.id, user.role, {"email": user.email})
     # Keep TTL in sync with the default in auth.py without re-exporting it.
@@ -224,7 +236,10 @@ async def signup(
     db.commit()
 
     logger.info("Account created", user_id=user_id, role=payload.role)
-    return _envelope((user_id, payload.email, payload.full_name, payload.role, company_id))
+    return _envelope(
+        (user_id, payload.email, payload.full_name, payload.role, company_id),
+        company_name=payload.company_name if payload.role == "COMPANY" else None,
+    )
 
 
 @router.post("/login", response_model=AuthEnvelope)
@@ -236,8 +251,13 @@ async def login(
 ) -> AuthEnvelope:
     cur = db.cursor()
     cur.execute(
-        "SELECT id, email, full_name, role, company_id, password_hash "
-        "FROM users WHERE email = %s",
+        """
+        SELECT u.id, u.email, u.full_name, u.role, u.company_id, u.password_hash,
+               c.name
+        FROM users u
+        LEFT JOIN companies c ON c.id = u.company_id
+        WHERE u.email = %s
+        """,
         (payload.email,),
     )
     row = cur.fetchone()
@@ -250,7 +270,7 @@ async def login(
         raise HTTPException(status_code=401, detail="Incorrect password.")
 
     logger.info("Login", user_id=row[0], role=row[3])
-    return _envelope(row[:5])
+    return _envelope(row[:5], company_name=row[6])
 
 
 @router.get("/me", response_model=AuthUser)

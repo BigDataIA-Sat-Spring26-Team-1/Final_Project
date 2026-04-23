@@ -62,6 +62,21 @@ class UpdateCompanyRequest(BaseModel):
     industry: Optional[str] = None
     description: Optional[str] = None
     company_size: Optional[str] = None
+    target_audience: Optional[str] = None
+    key_products: Optional[str] = None
+    content_pillars: Optional[str] = None
+    competitors: Optional[str] = None
+    tone_of_voice: Optional[str] = None
+
+
+ALLOWED_COMPANY_SIZES = {"EARLY_STAGE", "GROWTH", "MID_MARKET", "ENTERPRISE"}
+ALLOWED_TONES = {
+    "AUTHORITATIVE",
+    "CONVERSATIONAL",
+    "TECHNICAL",
+    "VISIONARY",
+    "PLAYFUL",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -293,25 +308,82 @@ async def list_companies(
     return {"total": total, "results": results}
 
 
+@router.get("/companies/{company_id}")
+async def get_company(
+    company_id: str,
+    db: SnowflakeConnection = Depends(get_db_connection),
+) -> Dict[str, Any]:
+    """Fetch a single company by id for the company-profile edit page."""
+    cur = db.cursor()
+    cur.execute(
+        """
+        SELECT id, name, domain, industry, description, company_size,
+               target_audience, key_products, content_pillars, competitors,
+               tone_of_voice, created_at, updated_at
+        FROM companies
+        WHERE id = %s
+        """,
+        (company_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Company not found.")
+    return {
+        "id": row[0],
+        "name": row[1],
+        "domain": row[2],
+        "industry": row[3],
+        "description": row[4],
+        "company_size": row[5],
+        "target_audience": row[6],
+        "key_products": row[7],
+        "content_pillars": row[8],
+        "competitors": row[9],
+        "tone_of_voice": row[10],
+        "created_at": _iso(row[11]),
+        "updated_at": _iso(row[12]),
+    }
+
+
 @router.put("/companies/{company_id}")
 async def update_company(
     company_id: str,
     payload: UpdateCompanyRequest,
     db: SnowflakeConnection = Depends(get_db_connection),
 ) -> Dict[str, str]:
-    dirty = {
-        k: v
-        for k, v in {
-            "name": payload.name,
-            "domain": payload.domain,
-            "industry": payload.industry,
-            "description": payload.description,
-            "company_size": payload.company_size,
-        }.items()
-        if v is not None
+    # Every profile field is mandatory — the downstream DAGs and the
+    # Strategic Brief agent rely on full context, so we reject partial
+    # payloads with explicit 422s.
+    required = {
+        "name": payload.name,
+        "domain": payload.domain,
+        "industry": payload.industry,
+        "description": payload.description,
+        "company_size": payload.company_size,
+        "target_audience": payload.target_audience,
+        "key_products": payload.key_products,
+        "content_pillars": payload.content_pillars,
+        "competitors": payload.competitors,
+        "tone_of_voice": payload.tone_of_voice,
     }
-    if not dirty:
-        return {"company_id": company_id, "status": "noop"}
+    missing = [k for k, v in required.items() if v is None or str(v).strip() == ""]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Missing required fields: {', '.join(missing)}",
+        )
+    if payload.company_size not in ALLOWED_COMPANY_SIZES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"company_size must be one of {sorted(ALLOWED_COMPANY_SIZES)}",
+        )
+    if payload.tone_of_voice not in ALLOWED_TONES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"tone_of_voice must be one of {sorted(ALLOWED_TONES)}",
+        )
+
+    dirty = {k: v.strip() if isinstance(v, str) else v for k, v in required.items()}
 
     cur = db.cursor()
     set_clause = ", ".join(f"{col} = %s" for col in dirty)
@@ -483,7 +555,7 @@ async def brief_archive(
     params: List[Any] = [company_id]
     query = """
         SELECT id, company_id, brief_date, brief_content, urgency_tier,
-               created_at, generated_at
+               created_at, generated_at, structured_brief
         FROM content_briefs
         WHERE company_id = %s
     """
@@ -496,6 +568,19 @@ async def brief_archive(
     cur = db.cursor()
     cur.execute(query, tuple(params))
     rows = cur.fetchall()
+
+    def _parse_variant(raw: Any) -> Optional[Dict[str, Any]]:
+        if raw is None:
+            return None
+        if isinstance(raw, dict):
+            return raw
+        if isinstance(raw, str) and raw.strip():
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                return None
+        return None
+
     results = [
         {
             "id": r[0],
@@ -505,6 +590,7 @@ async def brief_archive(
             "urgency_tier": r[4],
             "created_at": _iso(r[5]),
             "generated_at": _iso(r[6]),
+            "structured_brief": _parse_variant(r[7]),
         }
         for r in rows
     ]

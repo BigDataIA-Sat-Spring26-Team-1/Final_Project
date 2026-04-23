@@ -6,36 +6,35 @@
 // the backend). A date picker below lets analysts jump back into any
 // historical brief from the archive.
 
-import { Calendar, FileText, Loader2, Plus, TriangleAlert } from 'lucide-react';
+import { Calendar, FileText, Loader2, Plus, RefreshCw, TriangleAlert } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 
-import { CompanySwitcher } from '@/components/CompanySwitcher';
+import { useAuth } from '@/components/AuthProvider';
 import { PageWrapper } from '@/components/PageWrapper';
 import { Spinner } from '@/components/Spinner';
+import { StrategicBriefCard } from '@/components/StrategicBriefCard';
 import {
   generateB2BReport,
   getBriefArchive,
   type BriefArchiveItem,
 } from '@/lib/api';
-import { getLastCompanyId, setLastCompanyId } from '@/lib/b2b-cache';
 import { cn } from '@/lib/utils';
 
 const TODAY = new Date().toISOString().slice(0, 10);
 
 export default function CompanyDraftsPage() {
-  const [companyId, setCompanyId] = useState('');
+  const { user } = useAuth();
+  const companyId = user?.company_id ?? '';
   const [briefs, setBriefs] = useState<BriefArchiveItem[]>([]);
   const [selectedBrief, setSelectedBrief] = useState<BriefArchiveItem | null>(null);
-  const [archiveLoading, setArchiveLoading] = useState(false);
+  // Start loading so the archive sidebar + main pane render a spinner on
+  // first paint rather than the "no briefs" copy while the fetch is in
+  // flight.
+  const [archiveLoading, setArchiveLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-
-  // Hydrate last-used company id on mount.
-  useEffect(() => {
-    (async () => setCompanyId(getLastCompanyId()))();
-  }, []);
 
   const fetchArchive = useCallback(async (id: string, signal?: AbortSignal) => {
     setArchiveLoading(true);
@@ -60,7 +59,6 @@ export default function CompanyDraftsPage() {
       return;
     }
     const controller = new AbortController();
-    setLastCompanyId(companyId);
     fetchArchive(companyId, controller.signal);
     return () => controller.abort();
   }, [companyId, fetchArchive]);
@@ -71,15 +69,21 @@ export default function CompanyDraftsPage() {
   );
   const generateDisabled = !companyId || generating || archiveLoading || hasToday;
 
-  const handleGenerate = async () => {
-    if (!companyId || hasToday) return;
+  const handleGenerate = async (options: { force?: boolean } = {}) => {
+    if (!companyId) return;
+    if (!options.force && hasToday) return;
     setGenerating(true);
     setError(null);
     setNotice(null);
     try {
-      const res = await generateB2BReport({ user_id: companyId });
+      const res = await generateB2BReport(
+        { user_id: companyId },
+        { force: options.force },
+      );
       setNotice(
-        res.already_generated
+        options.force
+          ? 'Brief regenerated with the latest agent output.'
+          : res.already_generated
           ? "Today's brief was already stored — fetched from the archive."
           : 'Brief generated and saved successfully.',
       );
@@ -115,8 +119,19 @@ export default function CompanyDraftsPage() {
             </p>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
+            {hasToday && (
+              <button
+                onClick={() => handleGenerate({ force: true })}
+                disabled={!companyId || generating || archiveLoading}
+                title="Re-run today's brief with the latest agent"
+                className="flex items-center gap-2 bg-white/5 hover:bg-white/10 border border-white/10 disabled:opacity-40 disabled:cursor-not-allowed text-white px-5 py-3 rounded-2xl text-sm font-bold transition-all"
+              >
+                <RefreshCw className={cn('w-4 h-4', generating && 'animate-spin')} />
+                Regenerate
+              </button>
+            )}
             <button
-              onClick={handleGenerate}
+              onClick={() => handleGenerate()}
               disabled={generateDisabled}
               title={hasToday ? "Today's brief is already stored." : undefined}
               className="flex items-center gap-2 bg-primary hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed text-primary-foreground px-6 py-3 rounded-2xl text-sm font-bold transition-all"
@@ -135,10 +150,6 @@ export default function CompanyDraftsPage() {
                 </>
               )}
             </button>
-            <CompanySwitcher
-              currentCompanyId={companyId || null}
-              onSelect={(id) => setCompanyId(id)}
-            />
           </div>
         </header>
 
@@ -156,7 +167,10 @@ export default function CompanyDraftsPage() {
 
         {!companyId ? (
           <div className="glass rounded-3xl p-10 border border-dashed border-white/20 text-center">
-            <p className="text-dim">Pick a company from the dropdown to load its briefs.</p>
+            <p className="text-dim">
+              Your account isn&apos;t linked to a company yet. Contact an admin
+              to assign your tenant.
+            </p>
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
@@ -197,16 +211,44 @@ export default function CompanyDraftsPage() {
               )}
             </aside>
 
-            <div className="lg:col-span-3 glass rounded-3xl border border-white/5 p-8 space-y-6">
+            <div className="lg:col-span-3 space-y-6">
               {archiveLoading && !selectedBrief ? (
-                <Spinner label="Loading latest brief" />
+                <div className="glass rounded-3xl border border-white/5 p-8">
+                  <Spinner label="Loading latest brief" />
+                </div>
               ) : !selectedBrief ? (
-                <div className="flex flex-col items-center justify-center py-12 text-dim">
+                <div className="glass rounded-3xl border border-white/5 p-8 flex flex-col items-center justify-center py-12 text-dim">
                   <FileText className="w-12 h-12 mb-4" />
                   <p>Select a brief from the archive on the left.</p>
                 </div>
-              ) : (
+              ) : selectedBrief.structured_brief?.brief ? (
                 <>
+                  <StrategicBriefCard
+                    envelope={selectedBrief.structured_brief}
+                    briefDate={selectedBrief.brief_date}
+                    briefId={selectedBrief.id}
+                  />
+                  {selectedBrief.brief_content && (
+                    <details className="glass rounded-2xl border border-white/5 p-6">
+                      <summary className="cursor-pointer text-xs font-black uppercase tracking-[0.16em] text-dim hover:text-white transition-colors">
+                        View raw Markdown brief
+                      </summary>
+                      <div className="brief-sections space-y-4 mt-5 max-h-[60vh] overflow-auto pr-2">
+                        {splitBriefIntoCards(selectedBrief.brief_content).map((section, idx) => (
+                          <article
+                            key={idx}
+                            className="rounded-2xl border border-white/10 bg-white/[0.02] p-6 prose prose-invert max-w-none prose-headings:mt-0 prose-headings:mb-3 prose-p:text-white/80 prose-li:text-white/80 prose-strong:text-white"
+                          >
+                            <ReactMarkdown>{section}</ReactMarkdown>
+                          </article>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                </>
+              ) : (
+                // Legacy brief without structured output — render Markdown split.
+                <div className="glass rounded-3xl border border-white/5 p-8 space-y-6">
                   <div className="flex items-center justify-between flex-wrap gap-3 pb-6 border-b border-white/5">
                     <div>
                       <h2 className="text-2xl font-bold">Brief · {selectedBrief.brief_date}</h2>
@@ -242,7 +284,7 @@ export default function CompanyDraftsPage() {
                   ) : (
                     <p className="text-dim italic">No content recorded for this brief.</p>
                   )}
-                </>
+                </div>
               )}
             </div>
           </div>

@@ -47,7 +47,10 @@ export default function UserDashboard() {
   const [persona, setPersona] = useState<StoredPersona | null>(null);
   const [articles, setArticles] = useState<RankedArticle[]>([]);
   const [globalArticles, setGlobalArticles] = useState<RankedArticle[]>([]);
-  const [loading, setLoading] = useState(false);
+  // Start in a loading state so the first paint shows a spinner rather than
+  // the "no articles" empty copy — the fetch is kicked off in an effect.
+  const [loading, setLoading] = useState(true);
+  const [globalLoading, setGlobalLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   // Keep the "last used user" session key in sync for the legacy pages that
@@ -115,6 +118,9 @@ export default function UserDashboard() {
       })
       .catch(() => {
         // Tab stays empty on failure — personalized tab has its own error banner.
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setGlobalLoading(false);
       });
     return () => controller.abort();
   }, []);
@@ -141,7 +147,7 @@ export default function UserDashboard() {
               <Sparkles className="w-4 h-4" />
               Welcome back{user?.full_name ? `, ${user.full_name}` : ''}
             </div>
-            <h1 className="text-4xl font-bold tracking-tight">Your Intelligence Loop</h1>
+            <h1 className="text-4xl font-bold tracking-tight">Your Daily Feed</h1>
             <p className="text-dim text-lg">
               Daily tech updates curated for your <strong>{heroRole}</strong> persona.
             </p>
@@ -193,32 +199,43 @@ export default function UserDashboard() {
             <div className="space-y-4">
               {activeTab === 'PERSONALIZED' ? (
                 <>
-                  {userId && !loading && articles.length === 0 && !error && (
-                    <PromptCard message="No articles queued — run onboarding, then trigger an ingestion to populate the feed." />
+                  {loading && articles.length === 0 ? (
+                    <FeedSkeleton />
+                  ) : (
+                    <>
+                      {userId && articles.length === 0 && !error && (
+                        <PromptCard message="No articles queued — run onboarding, then trigger an ingestion to populate the feed." />
+                      )}
+                      {articles.map((article) => (
+                        <FeedableArticleRow
+                          key={article.cluster_id}
+                          article={article}
+                          userId={userId}
+                          onFeedback={handleArticleFeedback}
+                        />
+                      ))}
+                    </>
                   )}
-
-                  {articles.map((article) => (
-                    <FeedableArticleRow
-                      key={article.cluster_id}
-                      article={article}
-                      userId={userId}
-                      onFeedback={handleArticleFeedback}
-                    />
-                  ))}
                 </>
               ) : (
                 <>
-                  {globalArticles.length === 0 && (
-                    <PromptCard message="No ranked clusters yet — trigger ingestion + ranking to populate." />
+                  {globalLoading && globalArticles.length === 0 ? (
+                    <FeedSkeleton />
+                  ) : (
+                    <>
+                      {globalArticles.length === 0 && (
+                        <PromptCard message="No ranked clusters yet — trigger ingestion + ranking to populate." />
+                      )}
+                      {globalArticles.map((article) => (
+                        <FeedableArticleRow
+                          key={article.cluster_id}
+                          article={article}
+                          userId={userId}
+                          onFeedback={handleArticleFeedback}
+                        />
+                      ))}
+                    </>
                   )}
-                  {globalArticles.map((article) => (
-                    <FeedableArticleRow
-                      key={article.cluster_id}
-                      article={article}
-                      userId={userId}
-                      onFeedback={handleArticleFeedback}
-                    />
-                  ))}
                 </>
               )}
             </div>
@@ -307,5 +324,27 @@ function PromptCard({ message }: { message: string }) {
     <div className="glass rounded-2xl p-6 border border-dashed border-white/10 text-sm text-dim text-center">
       {message}
     </div>
+  );
+}
+
+function FeedSkeleton() {
+  return (
+    <>
+      <div className="glass rounded-2xl border border-white/5 p-6 flex items-center gap-3 text-dim text-sm">
+        <Loader2 className="w-4 h-4 animate-spin text-primary" />
+        Loading your feed…
+      </div>
+      {[0, 1, 2].map((i) => (
+        <div
+          key={i}
+          className="glass rounded-2xl border border-white/5 p-6 animate-pulse space-y-3"
+        >
+          <div className="h-3 bg-white/5 rounded w-1/4" />
+          <div className="h-5 bg-white/10 rounded w-3/4" />
+          <div className="h-3 bg-white/5 rounded w-full" />
+          <div className="h-3 bg-white/5 rounded w-2/3" />
+        </div>
+      ))}
+    </>
   );
 }

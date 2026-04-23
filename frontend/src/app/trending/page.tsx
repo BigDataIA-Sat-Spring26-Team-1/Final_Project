@@ -37,7 +37,9 @@ const CHART_BARS = 20;
 export default function TrendingPage() {
   const [filter, setFilter] = useState('');
   const [trends, setTrends] = useState<TrendCluster[]>([]);
-  const [loading, setLoading] = useState(false);
+  // Start in a loading state so the first paint shows a spinner, not the
+  // empty-chart copy, while getTopTrends is in flight.
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [ranking, setRanking] = useState(false);
   const [rankMessage, setRankMessage] = useState<string | null>(null);
@@ -230,7 +232,9 @@ export default function TrendingPage() {
             <h2 className="text-xl font-bold">Emerging Entities</h2>
             <div className="space-y-4">
               {loading && filtered.length === 0 && (
-                <p className="text-sm text-dim italic">Loading…</p>
+                <p className="text-sm text-dim italic flex items-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Loading…
+                </p>
               )}
               {!loading && filtered.length === 0 && (
                 <p className="text-sm text-dim italic">

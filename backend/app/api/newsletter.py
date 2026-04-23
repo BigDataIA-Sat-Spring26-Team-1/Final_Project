@@ -19,7 +19,7 @@ from app.core.logging_conf import get_logger
 from app.core.schemas import B2CNewsletterRequest, B2CNewsletterResponse
 from app.db.snowflake import get_db_connection
 from app.services.b2c_agent import get_b2c_newsletter_graph
-from app.services.mailer import send_newsletter_email
+from app.services.mailer import render_personalized_html, send_newsletter_email
 
 logger = get_logger("newsletter_api")
 router = APIRouter()
@@ -175,19 +175,10 @@ async def generate_b2c_newsletter(
     except Exception as e:
         logger.error("Newsletter persistence failed; returning unsaved content", error=str(e))
 
-    # Fire-and-forget email delivery on the fresh draft. `send_newsletter_email`
-    # is idempotent per (user_id, edition_date) so a later admin re-send is a
-    # no-op. Failures are logged but don't fail the generation — the user
-    # still gets the in-app preview.
-    try:
-        send_result = await send_newsletter_email(user_id, edition, db)
-        logger.info(
-            "Auto-email attempted after newsletter generation",
-            user_id=user_id,
-            status=send_result.get("status"),
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Auto-email after generation failed", error=str(e))
+    # Auto-send intentionally removed: email delivery is a manual action.
+    # Users trigger it from the Newsletter page's "Send to My Inbox" button
+    # (idempotent per user/day); admins can batch-dispatch via
+    # /admin/newsletters/send-all. There is no scheduled auto-email path.
 
     return B2CNewsletterResponse(
         status=agent_status,
@@ -225,6 +216,98 @@ class NewsletterSendResponse(BaseModel):
     detail: Optional[str] = None
     common_count: Optional[int] = None
     personal_count: Optional[int] = None
+
+
+class NewsletterPreviewResponse(BaseModel):
+    user_id: str
+    edition_date: str
+    html_content: str
+    already_sent: bool
+    sent_at: Optional[str] = None
+    recipient: Optional[str] = None
+    common_count: int = 0
+    personal_count: int = 0
+
+
+@router.get("/preview", response_model=NewsletterPreviewResponse)
+async def preview_newsletter_email(
+    user_id: str,
+    edition_date: Optional[str] = None,
+    db: SnowflakeConnection = Depends(get_db_connection),
+) -> NewsletterPreviewResponse:
+    """Render the email HTML the user would receive on ``edition_date``.
+
+    * For **today** (no ``edition_date``) we render on the fly via
+      ``render_personalized_html`` so the preview always reflects the
+      freshest data, then check the ``newsletters`` row for ``sent_at``.
+    * For a **past date** we serve the persisted ``newsletters`` row so the
+      user can re-read the exact email they received. 404 if no row exists
+      for that date (no retroactive rendering — the underlying cluster
+      snapshots change daily).
+    """
+    today = date.today().isoformat()
+    target = edition_date or today
+
+    cur = db.cursor()
+    cur.execute(
+        """
+        SELECT sent_at, delivery_recipient, final_content, draft_content
+        FROM newsletters
+        WHERE user_id = %s AND edition_date = %s
+        ORDER BY generated_at DESC NULLS LAST, created_at DESC
+        LIMIT 1
+        """,
+        (user_id, target),
+    )
+    row = cur.fetchone()
+    sent_at = _iso(row[0]) if row and row[0] is not None else None
+    recipient = row[1] if row else None
+    stored_html = ((row[2] if row else None) or (row[3] if row else None) or "").strip()
+
+    # Always try the on-the-fly render first — the mailer pulls that day's
+    # trend snapshot + the user's live persona, so the preview accurately
+    # reflects what the user would receive for that edition. We fall back to
+    # the stored HTML if the render pipeline can't build a preview (e.g., the
+    # trend DAG hasn't caught up yet).
+    rendered = None
+    try:
+        rendered = await render_personalized_html(user_id, target, db)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Preview render failed; will fall back to stored copy",
+            user_id=user_id,
+            edition_date=target,
+            error=str(exc),
+        )
+
+    if not rendered and stored_html:
+        return NewsletterPreviewResponse(
+            user_id=user_id,
+            edition_date=target,
+            html_content=stored_html,
+            already_sent=sent_at is not None,
+            sent_at=sent_at,
+            recipient=recipient,
+            common_count=0,
+            personal_count=0,
+        )
+
+    if not rendered:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No newsletter data available for {target}.",
+        )
+
+    return NewsletterPreviewResponse(
+        user_id=user_id,
+        edition_date=target,
+        html_content=rendered["html"],
+        already_sent=sent_at is not None,
+        sent_at=sent_at,
+        recipient=recipient,
+        common_count=rendered.get("common_count", 0),
+        personal_count=rendered.get("personal_count", 0),
+    )
 
 
 @router.post("/send", response_model=NewsletterSendResponse)
