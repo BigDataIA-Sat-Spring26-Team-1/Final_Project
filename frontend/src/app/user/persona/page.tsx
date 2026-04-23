@@ -41,7 +41,9 @@ export default function UserPersonaPage() {
   const userId = user?.id ?? '';
 
   const [persona, setPersona] = useState<StoredPersona | null>(null);
-  const [loading, setLoading] = useState(false);
+  // Start in a loading state so the first paint shows a spinner rather than
+  // the "no persona" copy while the /personas fetch is in flight.
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   // Edit state is off by default — the page is read-only until the user

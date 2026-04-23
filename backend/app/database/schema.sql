@@ -170,3 +170,12 @@ ALTER TABLE newsletters ADD COLUMN IF NOT EXISTS delivery_recipient VARCHAR(255)
 ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'USER';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS company_id VARCHAR(36);
+
+-- Extended company-profile fields (2026-04-23) — power the Strategic Brief
+-- agent's structured output. Optional on the row but treated as mandatory
+-- by the company-profile edit UI.
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS target_audience TEXT;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS key_products TEXT;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS content_pillars TEXT;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS competitors TEXT;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS tone_of_voice VARCHAR(50);

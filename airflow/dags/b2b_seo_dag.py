@@ -60,6 +60,8 @@ def resolve_companies(**context):
 
 def generate_briefs(**context):
     ensure_backend_on_path()
+    import json
+
     from app.db.snowflake import get_db_connection
     from app.services.b2b_agent import get_b2b_report_graph
 
@@ -72,6 +74,7 @@ def generate_briefs(**context):
     graph = get_b2b_report_graph()
     loop = asyncio.new_event_loop()
 
+    today_iso = date.today().isoformat()
     db_gen = get_db_connection()
     db = next(db_gen)
     succeeded = 0
@@ -82,10 +85,12 @@ def generate_briefs(**context):
             try:
                 # The B2B graph takes a ``user_id`` that actually carries the
                 # corporate client identifier — the name is a legacy artifact.
+                # ``brief_date`` seeds the structured-brief anchor rotation.
+                init_state = {"user_id": cid, "brief_date": today_iso}
                 if hasattr(graph, "ainvoke"):
-                    state = loop.run_until_complete(graph.ainvoke({"user_id": cid}))
+                    state = loop.run_until_complete(graph.ainvoke(init_state))
                 else:
-                    state = graph.invoke({"user_id": cid})
+                    state = graph.invoke(init_state)
 
                 # The B2B graph stores its output under ``generated_content`` —
                 # same convention as the B2C agent — not ``final_report``.
@@ -93,18 +98,24 @@ def generate_briefs(**context):
                 if not brief_md.strip():
                     raise RuntimeError("Agent returned empty brief.")
 
+                metadata = (state or {}).get("metadata") or {}
+                structured_brief = metadata.get("structured_brief")
+                urgency_tier = metadata.get("urgency_tier") or "MONITOR"
+
                 cur.execute(
                     """
                     INSERT INTO content_briefs
-                        (id, company_id, brief_date, brief_content, urgency_tier, status, generated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP())
+                        (id, company_id, brief_date, brief_content, urgency_tier,
+                         structured_brief, status, generated_at)
+                    SELECT %s, %s, %s, %s, %s, PARSE_JSON(%s), %s, CURRENT_TIMESTAMP()
                     """,
                     (
                         str(uuid.uuid4()),
                         cid,
-                        date.today().isoformat(),
+                        today_iso,
                         brief_md,
-                        (state or {}).get("urgency_tier", "MONITOR"),
+                        urgency_tier,
+                        json.dumps(structured_brief) if structured_brief else None,
                         "GENERATED",
                     ),
                 )

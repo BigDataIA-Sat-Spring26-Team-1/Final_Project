@@ -265,6 +265,42 @@ export interface B2BReportRequest {
   user_id: string;
 }
 
+export interface BriefKeyword {
+  keyword: string;
+  monthly_volume?: number | null;
+  velocity_pct?: number | null;
+  status?: string | null;
+}
+
+export interface BriefContentSection {
+  step: number;
+  title: string;
+  description: string;
+}
+
+export interface BriefReference {
+  title: string;
+  url: string;
+  source_name?: string | null;
+}
+
+export interface StrategicBrief {
+  opportunity_score: number;
+  urgency_tier: string;
+  headline: string;
+  blue_ocean_angle: string;
+  editorial_titles: string[];
+  primary_keywords: BriefKeyword[];
+  content_structure: BriefContentSection[];
+  internal_linking_strategy: string;
+}
+
+export interface StrategicBriefEnvelope {
+  brief: StrategicBrief;
+  reference_sources: BriefReference[];
+  company_snapshot?: Record<string, unknown>;
+}
+
 export interface B2BReportResponse {
   user_id: string;
   report: string;
@@ -272,6 +308,8 @@ export interface B2BReportResponse {
   already_generated?: boolean;
   generated_at?: string | null;
   brief_date?: string | null;
+  structured_brief?: StrategicBriefEnvelope | null;
+  urgency_tier?: string | null;
 }
 
 export interface IngestionBatchResponse {
@@ -459,6 +497,29 @@ export interface NewsletterSendResponse {
   personal_count?: number | null;
 }
 
+export interface NewsletterPreviewResponse {
+  user_id: string;
+  edition_date: string;
+  html_content: string;
+  already_sent: boolean;
+  sent_at?: string | null;
+  recipient?: string | null;
+  common_count: number;
+  personal_count: number;
+}
+
+export function previewNewsletterEmail(
+  userId: string,
+  editionDate?: string,
+  signal?: AbortSignal,
+): Promise<NewsletterPreviewResponse> {
+  return request<NewsletterPreviewResponse>('/api/v1/newsletter/preview', {
+    method: 'GET',
+    query: { user_id: userId, edition_date: editionDate },
+    signal,
+  });
+}
+
 export function sendNewsletterEmail(
   userId: string,
   editionDate?: string,
@@ -508,6 +569,7 @@ export interface BriefArchiveItem {
   urgency_tier: string;
   created_at: string;
   generated_at?: string;
+  structured_brief?: StrategicBriefEnvelope | null;
 }
 
 export interface BriefArchiveResponse {
@@ -663,11 +725,13 @@ export function generateB2CNewsletter(
 
 export function generateB2BReport(
   payload: B2BReportRequest,
-  signal?: AbortSignal,
+  options: { force?: boolean; signal?: AbortSignal } = {},
 ): Promise<B2BReportResponse> {
+  const { force = false, signal } = options;
   return request<B2BReportResponse>('/api/v1/b2b/report', {
     method: 'POST',
     json: payload,
+    query: force ? { force: 'true' } : undefined,
     signal,
   });
 }
@@ -754,26 +818,55 @@ export function updateUserProfile(
   );
 }
 
+export interface CompanyDetail {
+  id: string;
+  name: string | null;
+  domain: string | null;
+  industry: string | null;
+  description: string | null;
+  company_size: string | null;
+  target_audience?: string | null;
+  key_products?: string | null;
+  content_pillars?: string | null;
+  competitors?: string | null;
+  tone_of_voice?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface CompanyProfilePayload {
+  name: string;
+  domain: string;
+  industry: string;
+  description: string;
+  company_size: string;
+  target_audience: string;
+  key_products: string;
+  content_pillars: string;
+  competitors: string;
+  tone_of_voice: string;
+}
+
+export function getCompanyProfile(
+  companyId: string,
+  signal?: AbortSignal,
+): Promise<CompanyDetail> {
+  return request<CompanyDetail>(
+    `/api/v1/admin/companies/${encodeURIComponent(companyId)}`,
+    { method: 'GET', signal },
+  );
+}
+
 export function updateCompanyProfile(
   companyId: string,
-  name?: string,
-  domain?: string,
-  industry?: string,
-  description?: string,
-  companySize?: string,
+  payload: CompanyProfilePayload,
   signal?: AbortSignal,
 ): Promise<{ company_id: string; status: string }> {
   return request<{ company_id: string; status: string }>(
     `/api/v1/admin/companies/${encodeURIComponent(companyId)}`,
     {
       method: 'PUT',
-      json: {
-        name,
-        domain,
-        industry,
-        description,
-        company_size: companySize,
-      },
+      json: payload,
       signal,
     },
   );
@@ -934,6 +1027,7 @@ export interface AuthUser {
   full_name: string | null;
   role: AuthRole;
   company_id: string | null;
+  company_name?: string | null;
 }
 
 export interface AuthEnvelope {

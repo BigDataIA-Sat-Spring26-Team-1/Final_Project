@@ -77,7 +77,6 @@ const USER_ITEMS: NavItem[] = [
 
 const COMPANY_ITEMS: NavItem[] = [
   { name: 'Strategic Drafts', href: '/company/drafts', icon: LayoutDashboard },
-  { name: 'Brief Archive', href: '/company/briefs', icon: Newspaper },
   { name: 'Keyword Velocity', href: '/company/trends', icon: TrendingUp },
   { name: 'Company Profile', href: '/company/profile', icon: Settings },
 ];
@@ -128,6 +127,17 @@ export function Navigation() {
         </div>
         <span className="text-xl font-bold tracking-tight gradient-text">CurateAI</span>
       </div>
+
+      {user.role === 'COMPANY' && user.company_name && (
+        <div className="glass rounded-xl border border-secondary/20 bg-secondary/[0.04] px-3 py-3 space-y-0.5">
+          <div className="text-[10px] font-black uppercase tracking-widest text-secondary">
+            Company
+          </div>
+          <p className="text-sm font-bold truncate text-white">
+            {user.company_name}
+          </p>
+        </div>
+      )}
 
       <div className="glass rounded-xl border border-white/5 px-3 py-3 space-y-1">
         <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest">

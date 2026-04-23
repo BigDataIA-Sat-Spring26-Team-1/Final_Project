@@ -147,10 +147,15 @@ def _load_common_highlights(
 
 
 async def _load_personalized(
-    user_id: str, db: SnowflakeConnection, limit: int = PERSONAL_LIMIT
+    user_id: str,
+    db: SnowflakeConnection,
+    limit: int = PERSONAL_LIMIT,
+    edition_date: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Delegate to the Search service so the picks match /user's feed."""
-    payload = await SearchService.get_personalized_recommendations(user_id, limit, db)
+    payload = await SearchService.get_personalized_recommendations(
+        user_id, limit, db, edition_date=edition_date
+    )
     if not payload:
         return []
     return payload.get("results", [])
@@ -179,7 +184,7 @@ def _article_row_html(article: Dict[str, Any], accent: str) -> str:
     source_line = _esc(source) if source else ""
     status = article.get("trend_status") or "FEATURED"
     title_link = (
-        f'<a href="{_esc(url)}" style="color:#0f172a;text-decoration:none;" '
+        f'<a href="{_esc(url)}" style="color:#f8fafc;text-decoration:none;" '
         'target="_blank">' + title + "</a>"
         if url
         else title
@@ -187,21 +192,21 @@ def _article_row_html(article: Dict[str, Any], accent: str) -> str:
     cta = (
         f'<a href="{_esc(url)}" target="_blank" '
         'style="display:inline-block;margin-top:10px;padding:8px 14px;'
-        'border-radius:6px;background:#0f172a;color:#ffffff;'
-        'text-decoration:none;font-size:12px;font-weight:600;">Read source →</a>'
+        'border-radius:8px;background:#2dd4bf;color:#0f172a;'
+        'text-decoration:none;font-size:12px;font-weight:700;">Read source →</a>'
         if url
         else ""
     )
     meta_parts: List[str] = [f'<span style="color:{accent};font-weight:700;">{_esc(status)}</span>']
     if source_line:
-        meta_parts.append(f'<span style="color:#64748b;">{source_line}</span>')
+        meta_parts.append(f'<span style="color:#94a3b8;">{source_line}</span>')
     meta = ' · '.join(meta_parts)
 
     return (
-        '<tr><td style="padding:14px 0;border-bottom:1px solid #e2e8f0;">'
+        '<tr><td style="padding:16px 0;border-bottom:1px solid rgba(148,163,184,0.15);">'
         f'<div style="font-size:11px;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:6px;">{meta}</div>'
-        f'<div style="font-size:17px;font-weight:700;line-height:1.35;color:#0f172a;">{title_link}</div>'
-        + (f'<div style="font-size:13px;line-height:1.55;color:#475569;margin-top:6px;">{summary}</div>' if summary else "")
+        f'<div style="font-size:17px;font-weight:700;line-height:1.35;color:#f8fafc;">{title_link}</div>'
+        + (f'<div style="font-size:13px;line-height:1.55;color:#cbd5e1;margin-top:6px;">{summary}</div>' if summary else "")
         + cta
         + '</td></tr>'
     )
@@ -217,17 +222,17 @@ def _hero_html(article: Dict[str, Any]) -> str:
         or ""
     )
     linked = (
-        f'<a href="{_esc(url)}" style="color:#ffffff;text-decoration:none;" target="_blank">{title}</a>'
+        f'<a href="{_esc(url)}" style="color:#0f172a;text-decoration:none;" target="_blank">{title}</a>'
         if url
         else title
     )
     src = _esc(source)
     return (
-        '<tr><td style="padding:28px 32px;background:#0f172a;color:#ffffff;border-radius:12px;">'
-        '<div style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#94a3b8;margin-bottom:10px;">Top Headline</div>'
+        '<tr><td style="padding:28px 32px;background:linear-gradient(135deg,#2dd4bf 0%,#6366f1 100%);color:#0f172a;border-radius:16px;">'
+        '<div style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#0f172a;opacity:0.75;margin-bottom:10px;font-weight:700;">Top Headline</div>'
         f'<div style="font-size:26px;font-weight:800;line-height:1.25;">{linked}</div>'
-        + (f'<div style="font-size:14px;line-height:1.6;color:#cbd5e1;margin-top:12px;">{summary}</div>' if summary else "")
-        + (f'<div style="font-size:12px;color:#94a3b8;margin-top:14px;">{src}</div>' if src else "")
+        + (f'<div style="font-size:14px;line-height:1.6;color:#0f172a;opacity:0.8;margin-top:12px;">{summary}</div>' if summary else "")
+        + (f'<div style="font-size:12px;color:#0f172a;opacity:0.7;margin-top:14px;font-weight:600;">{src}</div>' if src else "")
         + '</td></tr>'
     )
 
@@ -244,8 +249,8 @@ def _render_html(
     hero = common[0] if common else None
     rest_common = common[1:] if common else []
 
-    personal_rows = "".join(_article_row_html(a, "#6366f1") for a in personal)
-    common_rows = "".join(_article_row_html(a, "#10b981") for a in rest_common)
+    personal_rows = "".join(_article_row_html(a, "#2dd4bf") for a in personal)
+    common_rows = "".join(_article_row_html(a, "#6366f1") for a in rest_common)
 
     hero_block = _hero_html(hero) if hero else ""
 
@@ -254,23 +259,23 @@ def _render_html(
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
-  <title>CurateAI · The Intelligence Loop — {_esc(edition_date)}</title>
+  <title>CurateAI — {_esc(edition_date)}</title>
 </head>
-<body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0f172a;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;padding:32px 0;">
+<body style="margin:0;padding:0;background:#0f172a;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#f8fafc;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0f172a;padding:32px 0;">
   <tr><td align="center">
-    <table role="presentation" width="640" cellpadding="0" cellspacing="0" style="max-width:640px;width:100%;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 10px 30px rgba(15,23,42,0.08);">
+    <table role="presentation" width="640" cellpadding="0" cellspacing="0" style="max-width:640px;width:100%;background:#1e293b;border-radius:20px;overflow:hidden;box-shadow:0 10px 40px rgba(45,212,191,0.12);border:1px solid rgba(148,163,184,0.12);">
       <tr>
         <td style="padding:28px 32px 0 32px;">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
-            <div>
-              <div style="font-size:13px;letter-spacing:0.16em;color:#6366f1;font-weight:700;text-transform:uppercase;">CurateAI</div>
-              <div style="font-size:22px;font-weight:800;line-height:1.2;margin-top:4px;">The Intelligence Loop</div>
+            <div style="display:flex;align-items:center;gap:10px;">
+              <div style="width:36px;height:36px;border-radius:10px;background:#2dd4bf;color:#0f172a;font-weight:900;font-size:16px;display:inline-block;text-align:center;line-height:36px;">C</div>
+              <div style="font-size:22px;font-weight:800;letter-spacing:-0.01em;color:#f8fafc;">CurateAI</div>
             </div>
-            <div style="text-align:right;font-size:12px;color:#64748b;">{_esc(edition_date)}</div>
+            <div style="text-align:right;font-size:12px;color:#94a3b8;font-family:monospace;">{_esc(edition_date)}</div>
           </div>
-          <div style="margin-top:18px;font-size:14px;color:#475569;line-height:1.55;">
-            Hey {_esc(greeting_name)} — today's tech deck curated for your <strong>{_esc(persona)}</strong> persona.
+          <div style="margin-top:20px;font-size:14px;color:#cbd5e1;line-height:1.55;">
+            Hey {_esc(greeting_name)} — your daily tech briefing, curated for <strong style="color:#2dd4bf;">{_esc(persona)}</strong>.
           </div>
         </td>
       </tr>
@@ -279,28 +284,28 @@ def _render_html(
 
       <tr>
         <td style="padding:28px 32px 0 32px;">
-          <div style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#6366f1;font-weight:700;">Curated For You</div>
-          <div style="font-size:18px;font-weight:800;margin-top:4px;">Top {len(personal)} personalized picks</div>
+          <div style="font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:#2dd4bf;font-weight:800;">Curated For You</div>
+          <div style="font-size:18px;font-weight:800;margin-top:4px;color:#f8fafc;">Top {len(personal)} personalized picks</div>
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:10px;">
-            {personal_rows or '<tr><td style="padding:14px 0;color:#64748b;font-style:italic;">No personalized articles ranked for today.</td></tr>'}
+            {personal_rows or '<tr><td style="padding:14px 0;color:#94a3b8;font-style:italic;">No personalized articles ranked for today.</td></tr>'}
           </table>
         </td>
       </tr>
 
       <tr>
         <td style="padding:32px 32px 12px 32px;">
-          <div style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:#10b981;font-weight:700;">Today's Deck</div>
-          <div style="font-size:18px;font-weight:800;margin-top:4px;">Top {len(rest_common)} trending across every feed</div>
+          <div style="font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:#6366f1;font-weight:800;">Today's Deck</div>
+          <div style="font-size:18px;font-weight:800;margin-top:4px;color:#f8fafc;">Top {len(rest_common)} trending across every feed</div>
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:10px;">
-            {common_rows or '<tr><td style="padding:14px 0;color:#64748b;font-style:italic;">Trend snapshot still warming up.</td></tr>'}
+            {common_rows or '<tr><td style="padding:14px 0;color:#94a3b8;font-style:italic;">Trend snapshot still warming up.</td></tr>'}
           </table>
         </td>
       </tr>
 
       <tr>
-        <td style="padding:16px 32px 32px 32px;border-top:1px solid #e2e8f0;">
-          <div style="font-size:12px;color:#64748b;line-height:1.6;">
-            Sent by CurateAI · generated {_esc(edition_date)} · <a href="#" style="color:#6366f1;">manage preferences</a>
+        <td style="padding:20px 32px 32px 32px;border-top:1px solid rgba(148,163,184,0.15);">
+          <div style="font-size:12px;color:#94a3b8;line-height:1.6;">
+            Sent by <strong style="color:#2dd4bf;">CurateAI</strong> · generated {_esc(edition_date)}
           </div>
         </td>
       </tr>
@@ -321,7 +326,7 @@ def _plain_text_fallback(
         src = a.get("source_name") or (a.get("sources") or [""])[0]
         return f"- {a.get('title','')}" + (f" ({src})" if src else "") + (f" → {a['url']}" if a.get("url") else "")
 
-    parts = [f"CurateAI — The Intelligence Loop ({edition_date})", ""]
+    parts = [f"CurateAI — Daily Briefing ({edition_date})", ""]
     parts.append(f"Curated for {user.get('full_name') or user.get('email') or 'you'}")
     parts.append("")
     parts.append(f"Top {len(personal)} personalized picks:")
@@ -334,6 +339,28 @@ def _plain_text_fallback(
 
 # --- Public API --------------------------------------------------------------
 
+def _rotate_by_date(items: List[Dict[str, Any]], edition_date: str) -> List[Dict[str, Any]]:
+    """Stable rotation so each past edition surfaces a different ordering.
+
+    Our ingestion sampling gives us a bounded pool of clusters/articles per
+    run. Without rotation the archive would show the same top-N in the same
+    order every day. We rotate the list by ``(today - edition_date).days``
+    which yields deterministic, distinct orderings per day while keeping the
+    full article set identical.
+    """
+    if not items:
+        return items
+    try:
+        ed = _date.fromisoformat(edition_date)
+    except ValueError:
+        return items
+    offset = (_date.today() - ed).days
+    if offset <= 0:
+        return items
+    shift = offset % len(items)
+    return items[shift:] + items[:shift]
+
+
 async def render_personalized_html(
     user_id: str, edition_date: str, db: SnowflakeConnection
 ) -> Optional[Dict[str, Any]]:
@@ -342,7 +369,10 @@ async def render_personalized_html(
     if not user:
         return None
     common = _load_common_highlights(db, edition_date)
-    personal = await _load_personalized(user_id, db)
+    personal = await _load_personalized(user_id, db, edition_date=edition_date)
+    # Rotate the ordering by date offset so archive views aren't identical.
+    common = _rotate_by_date(common, edition_date)
+    personal = _rotate_by_date(personal, edition_date)
     html = _render_html(user, edition_date, common, personal)
     text = _plain_text_fallback(user, edition_date, common, personal)
     return {
@@ -528,7 +558,7 @@ async def send_newsletter_email(
             "detail": "User has no email on file and no test recipient configured.",
         }
 
-    subject = f"CurateAI · The Intelligence Loop — {target_date}"
+    subject = f"CurateAI — Daily Briefing · {target_date}"
 
     # Offload the MailerSend HTTP call to a worker thread so we don't block
     # the async event loop on a synchronous SDK.

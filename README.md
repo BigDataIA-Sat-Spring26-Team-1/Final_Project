@@ -183,19 +183,15 @@ Secrets are stored in GCP Secret Manager (`SECRET_KEY`, `SNOWFLAKE_PASSWORD`, `O
 ### B2C (individual readers)
 
 1. **Onboarding** (`/user/onboarding`) — upload one or more PDFs (LinkedIn export, resume). An LLM extracts a structured persona with a 10-category weight vector and one of six archetypes.
-2. **Persona inspector** (`/user/persona`) — see the explicit weights captured at onboarding alongside the behavioral weights that drift from feedback.
-3. **Dashboard** (`/user`) — personalized article feed driven by `SearchService.get_personalized_recommendations`. Each row has like / dislike / skip buttons; the signal flows through `/personas/feedback` and updates the persona in-place.
-4. **Newsletter** (`/newsletter`) — run the B2C LangGraph (curate → write → editor review → publish). The "Fast" toggle skips the editor loop.
-5. **Profile editor** (`/user/profile`) — edit job title, seniority, bio, LinkedIn URL via `PUT /admin/personas/{id}`.
-6. **Newsletter archive** (`/user/newsletters`) — paginated view of past editions with date filter.
+2. **Persona inspector** (`/user/persona`) — see the explicit weights captured at onboarding alongside the behavioral weights that drift from feedback. Toggle "Update Interests" to edit bio + category picks in place.
+3. **My Feed** (`/user`) — personalized article feed driven by `SearchService.get_personalized_recommendations`. Each row has like / dislike / skip buttons; the signal flows through `/personas/feedback` and updates the persona in-place. First paint renders a pulsing skeleton, not the empty-state copy.
+4. **Newsletter** (`/newsletter`) — renders the actual email HTML the user would receive (via `GET /api/v1/newsletter/preview`) in a sandboxed iframe. A date picker flips between today's preview and the archive of past editions. One explicit **Send to My Inbox** button dispatches via MailerSend; it's idempotent per `(user_id, edition_date)` and disables once `sent_at` is stamped. There is no auto-email on generate — delivery is always a manual user or admin action.
 
 ### B2B (corporate tenants)
 
-1. **Drafts** (`/company/drafts`) — kick the B2B LangGraph (intel_extract → report_gen). The agent pulls cross-cluster signals, scores them with a 3-signal urgency algorithm (relevance 40 % + velocity 30 % + competition gap 30 %), and emits a Markdown briefing.
-2. **Company dashboard** (`/company`) — keyword-velocity chart, authority overlap, signal feed.
-3. **Trends table** (`/company/trends`) — filterable keyword table mapped to LEADER / EMERGING / OPPORTUNITY / MATURE.
-4. **Brief archive** (`/company/briefs`) — past briefs keyed by company + date.
-5. **Profile editor** (`/company/profile`) — edit domain, industry, company size, description.
+1. **Strategic Drafts** (`/company/drafts`) — the B2B LangGraph (init → intel_extract → brief_build → render_markdown). The agent scores cross-cluster signals with the 3-signal urgency algorithm (relevance 40 % + velocity 30 % + competition gap 30 %), calls the LLM with a Pydantic-structured `StrategicBrief` response format, cross-joins SpaCy keyword velocity, and pulls reference sources from `articles_raw`. The frontend renders the structured payload (Blue Ocean angle, editorial titles, primary keyword velocity table, detailed content structure, internal linking strategy, reference sources) in the layout from `Temp/SEO_Prototype/UI/index.html`; the raw Markdown brief is kept in a collapsible `<details>`. A **Regenerate** button reruns the agent for today (`?force=true`) so stale briefs can be rebuilt without waiting on the scheduled DAG.
+2. **Keyword Velocity** (`/company/trends`) — SpaCy-driven entity velocity table with SURGING / STABLE / DECLINING tags.
+3. **Company Profile** (`/company/profile`) — edits the 10 tenant fields used by the Strategic Brief agent: name, domain, industry, description, company size, target audience, key products, content pillars, competitors, and tone of voice (enum). Toggle-edit pattern mirrors the user persona page; all fields are mandatory and validated by the backend (422 on missing).
 
 ### Admin
 
@@ -368,4 +364,4 @@ Service accounts:
 
 ## License + credits
 
-Academic project — Northeastern University DAMG 7245 Spring 26 Team 1 (Aakash Belide, Abhinav Piyush, Rahul Singh). LLMs via LiteLLM / OpenAI. Framework credits: FastAPI, Next.js, LangGraph, Apache Airflow, Snowflake, Qdrant.
+Academic project — Northeastern University DAMG 7245 Spring 26 Team 1 (Aakash Belide, Abhinav KumarPiyush, Rahul Bothra). LLMs via LiteLLM / OpenAI. Framework credits: FastAPI, Next.js, LangGraph, Apache Airflow, Snowflake, Qdrant.
