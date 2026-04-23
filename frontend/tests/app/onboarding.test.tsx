@@ -32,6 +32,13 @@ describe('UserOnboarding page', () => {
   });
 
   it('extracts a persona after picking a file and shows the archetype', async () => {
+    // The onboarding gate now probes /personas/{id}; route that probe to 404
+    // so the page stays in "new user" mode for the happy-path test.
+    server.use(
+      http.get('http://localhost:8000/api/v1/personas/:userId', () =>
+        HttpResponse.json({ detail: 'not found' }, { status: 404 }),
+      ),
+    );
     const user = userEvent.setup();
     render(<UserOnboarding />);
 
@@ -54,6 +61,9 @@ describe('UserOnboarding page', () => {
 
   it('surfaces backend errors inline', async () => {
     server.use(
+      http.get('http://localhost:8000/api/v1/personas/:userId', () =>
+        HttpResponse.json({ detail: 'not found' }, { status: 404 }),
+      ),
       http.post('http://localhost:8000/api/v1/personas/extract', () =>
         HttpResponse.json({ detail: 'Rate limited' }, { status: 429 }),
       ),
