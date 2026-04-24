@@ -16,7 +16,7 @@ import {
   TriangleAlert,
   Users,
 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { CompanySwitcher } from '@/components/CompanySwitcher';
 import { PageWrapper } from '@/components/PageWrapper';
@@ -97,12 +97,23 @@ function TabButton({
   );
 }
 
+// Defensive client-side strip: older rows in Snowflake still carry a
+// ```html ... ``` Markdown fence around the HTML body because the B2C
+// writer node used to emit one. The agent now strips on write, but the
+// admin archive has to cope with the historical data too.
+const HTML_FENCE_RE = /^\s*```(?:html)?\s*\n?([\s\S]*?)\n?\s*```\s*$/i;
+function stripHtmlFence(body: string): string {
+  const m = body.match(HTML_FENCE_RE);
+  return (m ? m[1] : body).trim();
+}
+
 function B2CArchive() {
   const [userId, setUserId] = useState<string>('');
   const [items, setItems] = useState<NewsletterArchiveItem[]>([]);
   const [selected, setSelected] = useState<NewsletterArchiveItem | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
   // `sending[editionDate]` tracks the in-flight send per row so two quick
   // clicks don't double-fire. Cleared once the response lands.
   const [sending, setSending] = useState<Record<string, boolean>>({});
@@ -136,6 +147,19 @@ function B2CArchive() {
     load(userId, controller.signal);
     return () => controller.abort();
   }, [userId, load]);
+
+  // Render the selected newsletter inside a sandboxed iframe so the
+  // stored <!DOCTYPE html><html>… doesn't collide with the page chrome
+  // and so any stray styles in the archived body stay isolated.
+  useEffect(() => {
+    const body = selected?.final_content || selected?.draft_content;
+    if (!body || !iframeRef.current) return;
+    const doc = iframeRef.current.contentDocument;
+    if (!doc) return;
+    doc.open();
+    doc.write(stripHtmlFence(body));
+    doc.close();
+  }, [selected]);
 
   const formatResult = (res: NewsletterSendResponse): string => {
     if (res.status === 'SENT') return `Sent to ${res.recipient ?? 'recipient'}.`;
@@ -233,55 +257,63 @@ function B2CArchive() {
                   const isSending = Boolean(sending[n.edition_date]);
                   const alreadySent = Boolean(n.sent_at);
                   return (
-                    <li key={n.id} className="space-y-1.5">
-                      <button
-                        onClick={() => setSelected(n)}
+                    <li key={n.id}>
+                      {/* Single card per edition — the edition summary and
+                          the send action share one visual row so the list
+                          reads like distinct dates rather than a dup-card
+                          per row. */}
+                      <div
                         className={cn(
-                          'w-full text-left px-3 py-2 rounded-xl text-sm transition',
+                          'rounded-xl border transition',
                           selected?.id === n.id
-                            ? 'bg-primary/10 border border-primary/20 text-white'
-                            : 'hover:bg-white/5 text-dim',
+                            ? 'border-primary/30 bg-primary/10'
+                            : 'border-white/10 bg-white/[0.02] hover:bg-white/5',
                         )}
                       >
-                        <p className="font-mono text-xs">{n.edition_date}</p>
-                        <p className="text-[10px] uppercase tracking-widest text-dim mt-0.5">
-                          {n.status}
-                        </p>
-                        {alreadySent ? (
-                          <p className="text-[10px] text-emerald-400 mt-1 flex items-center gap-1">
-                            <CheckCircle2 className="w-3 h-3" />
-                            sent {new Date(n.sent_at!).toLocaleString()}
+                        <button
+                          onClick={() => setSelected(n)}
+                          className="w-full text-left px-3 pt-3 pb-2"
+                        >
+                          <p className="font-mono text-xs text-white">{n.edition_date}</p>
+                          <p className="text-[10px] uppercase tracking-widest text-dim mt-0.5">
+                            {n.status}
                           </p>
-                        ) : n.delivery_status === 'FAILED' ? (
-                          <p className="text-[10px] text-rose-400 mt-1">
-                            last attempt failed
-                          </p>
-                        ) : null}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleSend(n);
-                        }}
-                        disabled={isSending || alreadySent}
-                        title={alreadySent ? 'This edition was already delivered.' : 'Send this edition via email.'}
-                        className="w-full inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg text-[10px] uppercase tracking-widest font-bold border border-white/10 hover:border-primary/40 hover:text-primary disabled:opacity-40 disabled:cursor-not-allowed transition"
-                      >
-                        {isSending ? (
-                          <>
-                            <Loader2 className="w-3 h-3 animate-spin" /> Sending…
-                          </>
-                        ) : alreadySent ? (
-                          <>
-                            <CheckCircle2 className="w-3 h-3" /> Delivered
-                          </>
-                        ) : (
-                          <>
-                            <Send className="w-3 h-3" /> Send Email
-                          </>
+                          {alreadySent ? (
+                            <p className="text-[10px] text-emerald-400 mt-1 flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3" />
+                              sent {new Date(n.sent_at!).toLocaleString()}
+                            </p>
+                          ) : n.delivery_status === 'FAILED' ? (
+                            <p className="text-[10px] text-rose-400 mt-1">
+                              last attempt failed
+                            </p>
+                          ) : null}
+                        </button>
+                        {!alreadySent && (
+                          <div className="px-3 pb-3">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleSend(n);
+                              }}
+                              disabled={isSending}
+                              title="Send this edition via email."
+                              className="w-full inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg text-[10px] uppercase tracking-widest font-bold border border-white/10 hover:border-primary/40 hover:text-primary disabled:opacity-40 disabled:cursor-not-allowed transition"
+                            >
+                              {isSending ? (
+                                <>
+                                  <Loader2 className="w-3 h-3 animate-spin" /> Sending…
+                                </>
+                              ) : (
+                                <>
+                                  <Send className="w-3 h-3" /> Send Email
+                                </>
+                              )}
+                            </button>
+                          </div>
                         )}
-                      </button>
+                      </div>
                     </li>
                   );
                 })}
@@ -298,11 +330,17 @@ function B2CArchive() {
                 <p>Pick an edition on the left.</p>
               </div>
             ) : selected.final_content || selected.draft_content ? (
-              <article
-                className="newsletter-preview rounded-2xl border border-white/10 bg-white/[0.02] p-8 max-h-[70vh] overflow-auto prose prose-invert max-w-none"
-                dangerouslySetInnerHTML={{
-                  __html: selected.final_content || selected.draft_content || '',
-                }}
+              // Sandboxed iframe — stored body starts with <!DOCTYPE html>
+              // which would be invalid nested inside an <article>. The
+              // iframe also isolates the newsletter's own styles from the
+              // page chrome, and any stray ```html Markdown fence on
+              // legacy rows is stripped before the write (see the useEffect
+              // that drives this ref).
+              <iframe
+                ref={iframeRef}
+                title="Newsletter preview"
+                className="w-full rounded-2xl border border-white/10 bg-slate-900"
+                style={{ height: '70vh' }}
               />
             ) : (
               <p className="text-dim italic">No content stored for this edition.</p>

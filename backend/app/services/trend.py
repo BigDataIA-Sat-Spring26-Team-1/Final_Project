@@ -10,22 +10,13 @@ from snowflake.connector.pandas_tools import write_pandas
 logger = get_logger("app.services.trend")
 
 class TrendService:
-    """
-    Analyzes story clusters to calculate their global trend ranking.
-    Uses bulk SQL operations for near-instant performance.
-    """
-
-    # Removed hardcoded thresholds, now using config-driven settings
 
     @classmethod
     async def rank_daily_clusters(cls, db: SnowflakeConnection) -> Dict[str, Any]:
-        """
-        Bulk-ranks all clusters using a single fetch + single bulk update.
-        """
+
         start_time = time.time()
         cur = db.cursor()
 
-        # 1. SINGLE QUERY: Fetch all clusters with their article counts and weights in one shot
         cur.execute("""
             SELECT 
                 c.id AS cluster_id,
@@ -43,13 +34,11 @@ class TrendService:
             logger.info("No clusters found for trend analysis.")
             return {"processed": 0, "latency": 0}
 
-        # 2. Calculate scores in Python (instant)
         update_rows = []
         for row in rows:
             cluster_size = row["article_count"] or 1
             social_signal = row["social_popularity_score"] or 0.0
 
-            # Aggregate weights from the array
             cluster_weights = cls._aggregate_weights_from_array(row.get("all_weights"))
 
             status, boost = cls._calculate_status_and_boost(cluster_size, social_signal)
@@ -63,7 +52,6 @@ class TrendService:
                 "CLUSTER_SIZE": cluster_size
             })
 
-        # 3. SINGLE BULK UPDATE via write_pandas + JOIN
         df = pd.DataFrame(update_rows)
         cur.execute("CREATE OR REPLACE TEMPORARY TABLE trend_tmp (CLUSTER_ID STRING, CATEGORY_WEIGHTS STRING, TREND_STATUS STRING, FINAL_TREND_SCORE FLOAT, CLUSTER_SIZE INT)")
         write_pandas(db, df, table_name='TREND_TMP', schema=db.schema, database=db.database)
@@ -91,14 +79,12 @@ class TrendService:
 
     @staticmethod
     def _aggregate_weights_from_array(weights_array) -> Dict[str, float]:
-        """Aggregates category weights from Snowflake ARRAY_AGG result."""
         if not weights_array:
             return {}
 
         aggregated = {}
         counts = {}
 
-        # weights_array comes as a JSON string from Snowflake
         if isinstance(weights_array, str):
             try:
                 weights_array = json.loads(weights_array)
@@ -108,7 +94,6 @@ class TrendService:
         for item in weights_array:
             if not item:
                 continue
-            # Each item might be a JSON string or already a dict
             if isinstance(item, str):
                 try:
                     item = json.loads(item)
@@ -124,7 +109,6 @@ class TrendService:
 
     @classmethod
     def _calculate_status_and_boost(cls, cluster_size: int, social_signal: float) -> tuple[str, float]:
-        """Status assignment logic from trend_detection_prototype.py"""
         status = "REGULAR"
         boost = 0
 

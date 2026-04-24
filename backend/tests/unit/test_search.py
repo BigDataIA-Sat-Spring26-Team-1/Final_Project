@@ -103,6 +103,9 @@ async def test_results_pass_through_qdrant_hits():
         qd.return_value.query_points.return_value = fake_response
         out = await SearchService.get_personalized_recommendations("u1", 5, conn)
 
+    # `source_name`, `trend_status`, and `categories` were added to the
+    # Qdrant pass-through so like/dislike feedback has per-article taxonomy
+    # weights to multiply against. Missing keys default to empty.
     assert out["results"][0] == {
         "cluster_id": "cluster-1",
         "score": 0.8123,
@@ -110,5 +113,8 @@ async def test_results_pass_through_qdrant_hits():
         "url": "",
         "summary": "",
         "sources": ["S1"],
+        "source_name": "",
         "cluster_size": 3,
+        "trend_status": None,
+        "categories": {},
     }

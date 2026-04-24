@@ -1,44 +1,21 @@
-"""Admin / tenant-management endpoints.
-
-Frontend's admin console expects a small CRUD surface:
-    * create/list users and companies
-    * edit an existing user or company
-    * read newsletter / brief archives
-    * kick the ingestion DAG manually
-
-None of these are exposed to unauthenticated traffic in production — the
-Cloud Run service is protected by the upstream firewall / IAP. If we ever
-add self-serve signups the admin routes should move behind an
-``is_admin`` claim check.
-"""
 import json
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from snowflake.connector import SnowflakeConnection
-
 from app.core.airflow_client import AirflowUnavailable, trigger_dag
 from app.core.logging_conf import get_logger
 from app.core.schemas import DAGTriggerResponse
 from app.db.snowflake import get_db_connection
+from app.services.company_affinity import extract_company_affinity
 
 logger = get_logger("app.api.admin")
 router = APIRouter()
-
-
-# ---------------------------------------------------------------------------
-# Request / response shapes
-# ---------------------------------------------------------------------------
-
 class CreateUserRequest(BaseModel):
-    # Pydantic-native EmailStr would be nicer but pulls in the email-validator
-    # dependency — a plain regex + server-side uniqueness check is enough here.
     email: str = Field(..., pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
     full_name: Optional[str] = None
-
 
 class CreateCompanyRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
@@ -55,7 +32,6 @@ class UpdatePersonaRequest(BaseModel):
     bio_summary: Optional[str] = None
     linkedin_url: Optional[str] = None
 
-
 class UpdateCompanyRequest(BaseModel):
     name: Optional[str] = None
     domain: Optional[str] = None
@@ -68,7 +44,6 @@ class UpdateCompanyRequest(BaseModel):
     competitors: Optional[str] = None
     tone_of_voice: Optional[str] = None
 
-
 ALLOWED_COMPANY_SIZES = {"EARLY_STAGE", "GROWTH", "MID_MARKET", "ENTERPRISE"}
 ALLOWED_TONES = {
     "AUTHORITATIVE",
@@ -78,30 +53,18 @@ ALLOWED_TONES = {
     "PLAYFUL",
 }
 
-
-# ---------------------------------------------------------------------------
-# Small helpers
-# ---------------------------------------------------------------------------
-
 def _iso(value: Any) -> Optional[str]:
-    """Render Snowflake timestamps / dates as ISO strings or None."""
     if value is None:
         return None
     if hasattr(value, "isoformat"):
         return value.isoformat()
     return str(value)
 
-
-# ---------------------------------------------------------------------------
-# Users
-# ---------------------------------------------------------------------------
-
 @router.post("/users", status_code=201)
 async def create_user(
     payload: CreateUserRequest,
     db: SnowflakeConnection = Depends(get_db_connection),
 ) -> Dict[str, Any]:
-    """Provision a new user row. Email must be unique."""
     user_id = str(uuid.uuid4())
     cur = db.cursor()
 
@@ -124,14 +87,12 @@ async def create_user(
     logger.info("User created", user_id=user_id, email=payload.email)
     return {"id": user_id, "email": payload.email, "status": "created"}
 
-
 @router.get("/users")
 async def list_users(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: SnowflakeConnection = Depends(get_db_connection),
 ) -> Dict[str, Any]:
-    """Paginated directory of tenants."""
     cur = db.cursor()
     cur.execute("SELECT COUNT(*) FROM users")
     total = int(cur.fetchone()[0])
@@ -157,18 +118,12 @@ async def list_users(
     ]
     return {"total": total, "results": results}
 
-
 @router.put("/personas/{user_id}")
 async def update_persona(
     user_id: str,
     payload: UpdatePersonaRequest,
     db: SnowflakeConnection = Depends(get_db_connection),
 ) -> Dict[str, str]:
-    """Edit the editable persona fields (job title, bio, …).
-
-    Weight columns are NOT writable from this endpoint — those belong to the
-    extraction pipeline and the behavioral feedback loop.
-    """
     cur = db.cursor()
 
     if payload.full_name is not None:
@@ -200,19 +155,12 @@ async def update_persona(
     logger.info("Persona updated", user_id=user_id, fields=list(dirty.keys()))
     return {"user_id": user_id, "status": "updated"}
 
-
 @router.put("/personas/{user_id}/categories")
 async def update_persona_categories(
     user_id: str,
     payload: Dict[str, float],
     db: SnowflakeConnection = Depends(get_db_connection),
 ) -> Dict[str, Any]:
-    """Overwrite the explicit category weights for a user.
-
-    This is the "pick your interests" surface — the persona page sends a
-    dictionary of {category: weight}. We normalise values to [0, 1] and drop
-    anything below a 0.01 noise floor so the stored taxonomy stays clean.
-    """
     cleaned: Dict[str, float] = {}
     for cat, raw_weight in (payload or {}).items():
         try:
@@ -237,17 +185,11 @@ async def update_persona_categories(
     logger.info("Persona categories updated", user_id=user_id, categories=list(cleaned.keys()))
     return {"user_id": user_id, "explicit_category_weights": cleaned}
 
-
-# ---------------------------------------------------------------------------
-# Companies
-# ---------------------------------------------------------------------------
-
 @router.post("/companies", status_code=201)
 async def create_company(
     payload: CreateCompanyRequest,
     db: SnowflakeConnection = Depends(get_db_connection),
 ) -> Dict[str, Any]:
-    """Create a corporate tenant. Name is required, everything else is optional."""
     company_id = str(uuid.uuid4())
     cur = db.cursor()
 
@@ -270,10 +212,26 @@ async def create_company(
     except Exception as exc:
         logger.error("Company creation failed", error=str(exc))
         raise HTTPException(status_code=500, detail=f"Create failed: {exc}")
+    try:
+        affinity = await extract_company_affinity(
+            {
+                "name": payload.name,
+                "industry": payload.industry,
+                "description": payload.description,
+                "company_size": payload.company_size,
+            }
+        )
+        if affinity:
+            cur.execute(
+                "UPDATE companies SET content_affinity_weights = PARSE_JSON(%s) WHERE id = %s",
+                (json.dumps(affinity), company_id),
+            )
+            db.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Affinity extraction on create skipped", error=str(exc))
 
     logger.info("Company created", company_id=company_id, name=payload.name)
     return {"id": company_id, "name": payload.name, "status": "created"}
-
 
 @router.get("/companies")
 async def list_companies(
@@ -307,19 +265,29 @@ async def list_companies(
     ]
     return {"total": total, "results": results}
 
+def _parse_variant(raw: Any) -> Optional[Any]:
+    if raw is None:
+        return None
+    if isinstance(raw, (dict, list)):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+    return None
 
 @router.get("/companies/{company_id}")
 async def get_company(
     company_id: str,
     db: SnowflakeConnection = Depends(get_db_connection),
 ) -> Dict[str, Any]:
-    """Fetch a single company by id for the company-profile edit page."""
     cur = db.cursor()
     cur.execute(
         """
         SELECT id, name, domain, industry, description, company_size,
                target_audience, key_products, content_pillars, competitors,
-               tone_of_voice, created_at, updated_at
+               tone_of_voice, content_affinity_weights, created_at, updated_at
         FROM companies
         WHERE id = %s
         """,
@@ -340,20 +308,21 @@ async def get_company(
         "content_pillars": row[8],
         "competitors": row[9],
         "tone_of_voice": row[10],
-        "created_at": _iso(row[11]),
-        "updated_at": _iso(row[12]),
+        "content_affinity_weights": _parse_variant(row[11]),
+        "created_at": _iso(row[12]),
+        "updated_at": _iso(row[13]),
     }
-
 
 @router.put("/companies/{company_id}")
 async def update_company(
     company_id: str,
     payload: UpdateCompanyRequest,
     db: SnowflakeConnection = Depends(get_db_connection),
-) -> Dict[str, str]:
-    # Every profile field is mandatory — the downstream DAGs and the
-    # Strategic Brief agent rely on full context, so we reject partial
-    # payloads with explicit 422s.
+) -> Dict[str, Any]:
+    # Returns {company_id, status, affinity_refreshed}. The bool field forces
+    # Dict[str, Any] — under Dict[str, str] FastAPI's response validator
+    # raised ResponseValidationError on every successful save, masquerading
+    # as a generic 500 in the browser.
     required = {
         "name": payload.name,
         "domain": payload.domain,
@@ -398,12 +367,25 @@ async def update_company(
     )
     db.commit()
     logger.info("Company updated", company_id=company_id, fields=list(dirty.keys()))
-    return {"company_id": company_id, "status": "updated"}
+    affinity_updated = False
+    try:
+        affinity = await extract_company_affinity(dirty)
+        if affinity:
+            cur.execute(
+                "UPDATE companies SET content_affinity_weights = PARSE_JSON(%s), "
+                "updated_at = CURRENT_TIMESTAMP WHERE id = %s",
+                (json.dumps(affinity), company_id),
+            )
+            db.commit()
+            affinity_updated = True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Affinity re-extract on update skipped", error=str(exc))
 
-
-# ---------------------------------------------------------------------------
-# Archive reads
-# ---------------------------------------------------------------------------
+    return {
+        "company_id": company_id,
+        "status": "updated",
+        "affinity_refreshed": affinity_updated,
+    }
 
 @router.get("/newsletters/all")
 async def newsletters_cross_tenant(
@@ -414,12 +396,6 @@ async def newsletters_cross_tenant(
     limit: int = Query(50, ge=1, le=200),
     db: SnowflakeConnection = Depends(get_db_connection),
 ) -> Dict[str, Any]:
-    """Cross-user newsletter archive for the admin console.
-
-    Without a date filter this returns the newsletters written *yesterday*,
-    which is usually the most recent fully-generated batch at the time an
-    admin is looking at the page. Pass ``date`` to look further back.
-    """
     from datetime import date as _date, timedelta
 
     effective = date or (_date.today() - timedelta(days=1)).isoformat()
@@ -453,14 +429,12 @@ async def newsletters_cross_tenant(
     ]
     return {"date": effective, "total": len(results), "results": results}
 
-
 @router.get("/briefs/all")
 async def briefs_cross_tenant(
     date: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=200),
     db: SnowflakeConnection = Depends(get_db_connection),
 ) -> Dict[str, Any]:
-    """Cross-company brief archive. Mirrors /newsletters/all."""
     from datetime import date as _date, timedelta
 
     effective = date or (_date.today() - timedelta(days=1)).isoformat()
@@ -494,7 +468,6 @@ async def briefs_cross_tenant(
     ]
     return {"date": effective, "total": len(results), "results": results}
 
-
 @router.get("/newsletters/archive")
 async def newsletter_archive(
     user_id: str = Query(..., description="The user whose newsletters to load."),
@@ -502,12 +475,6 @@ async def newsletter_archive(
     limit: int = Query(10, ge=1, le=100),
     db: SnowflakeConnection = Depends(get_db_connection),
 ) -> Dict[str, Any]:
-    """Recent newsletters for a given user, newest first.
-
-    The response surfaces delivery state (``sent_at``, ``delivery_status``,
-    ``delivery_recipient``) so the admin UI can show whether today's edition
-    already shipped by email and disable the send button accordingly.
-    """
     params: List[Any] = [user_id]
     query = """
         SELECT id, user_id, edition_date, status, generated_at,
@@ -543,7 +510,6 @@ async def newsletter_archive(
         for r in rows
     ]
     return {"total": len(results), "results": results}
-
 
 @router.get("/briefs/archive")
 async def brief_archive(
@@ -596,15 +562,8 @@ async def brief_archive(
     ]
     return {"total": len(results), "results": results}
 
-
-# ---------------------------------------------------------------------------
-# Admin DAG triggers
-# ---------------------------------------------------------------------------
-
 @router.post("/ingestion/trigger", status_code=202, response_model=DAGTriggerResponse)
 async def admin_trigger_ingestion() -> DAGTriggerResponse:
-    """Identical to /ingestion/fetch-rss but mounted under /admin so the
-    admin console can call it without also granting rate-limited user scope."""
     try:
         run = await trigger_dag("ingestion_dag")
     except AirflowUnavailable as exc:
@@ -617,11 +576,6 @@ async def admin_trigger_ingestion() -> DAGTriggerResponse:
         dag_run_id=run.get("dag_run_id", ""),
         state=run.get("state"),
     )
-
-
-# ---------------------------------------------------------------------------
-# Newsletter delivery (MailerSend) — batch entry point
-# ---------------------------------------------------------------------------
 
 @router.post("/newsletters/send-all")
 async def admin_send_newsletters_batch(
@@ -638,15 +592,8 @@ async def admin_send_newsletters_batch(
     ),
     db: SnowflakeConnection = Depends(get_db_connection),
 ) -> Dict[str, Any]:
-    """Fan out MailerSend dispatches for an edition.
-
-    Concurrency is bounded (MailerSend's public API quota is modest) — we
-    process up to 5 users in flight. Each send is idempotent per
-    ``(user_id, edition_date)`` so retrying the batch is safe.
-    """
     from asyncio import Semaphore, gather
     from app.services.mailer import send_newsletter_email
-
     from datetime import date as _date
 
     target = date or _date.today().isoformat()

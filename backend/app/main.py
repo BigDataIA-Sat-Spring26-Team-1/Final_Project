@@ -1,17 +1,6 @@
-"""FastAPI entrypoint for the CurateAI backend.
-
-Wires up:
-    * Lifespan hooks that sync Snowflake + Qdrant schema on startup.
-    * Structured logging + a per-request context (request_id, client_ip).
-    * CORS, gzip, and rate limiting middleware.
-    * A small family of system endpoints (`/livez`, `/api/v1/health`, `/metrics`).
-    * All API routers under `/api/v1/*`.
-    * The FastMCP sub-application at `/api/v1/mcp` for Claude Desktop.
-"""
 import time
 import uuid
 from contextlib import asynccontextmanager
-
 import snowflake.connector
 import structlog
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
@@ -23,7 +12,6 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from starlette.exceptions import HTTPException as StarletteHTTPException
-
 from app.api import admin, auth, b2b, deduplication, ingestion, personas, search, trend
 from app.api.newsletter import router as newsletter_router
 from app.core.config import Settings, get_settings
@@ -35,26 +23,17 @@ from app.core.metrics import HTTP_REQUEST_DURATION, REGISTRY
 from app.db.qdrant import sync_vector_collections
 from app.db.snowflake import get_db_connection, sync_database_schema
 
-
-# Logging has to be configured before any logger is bound — otherwise early
-# log lines fall back to stdlib defaults and miss the JSON/console renderer.
 setup_logging(get_settings().app_env)
 logger = get_logger("app")
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Run once when the ASGI app boots and once when it drains.
 
-    Both sync functions are idempotent, so re-running them on every Cloud Run
-    revision is safe and saves a separate migration job.
-    """
     logger.info("Application starting up")
     sync_database_schema()
     sync_vector_collections()
     yield
     logger.info("Application shutting down")
-
 
 app = FastAPI(
     title="CurateAI Intelligence Platform",
@@ -62,15 +41,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# slowapi wires its limiter into the app state and hooks the 429 response.
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# Compress anything meaningfully sized — newsletter HTML bodies benefit most.
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
-# CORS origins come from config so the same image runs locally against
-# http://localhost:3000 and on Cloud Run against https://curateai-frontend...
 _settings = get_settings()
 app.add_middleware(
     CORSMiddleware,
@@ -80,15 +55,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 @app.middleware("http")
 async def request_context_middleware(request: Request, call_next):
-    """Tag every log line with a request_id + client metadata.
 
-    The context is bound via ``structlog.contextvars`` so async call stacks
-    inherit it automatically — no need to thread the request_id through
-    service signatures.
-    """
     request_id = str(uuid.uuid4())
     client_ip = request.client.host if request.client else "unknown"
 
@@ -104,7 +73,6 @@ async def request_context_middleware(request: Request, call_next):
     response = await call_next(request)
     duration = time.perf_counter() - start_time
 
-    # Prometheus histogram (see app.core.metrics) — powers p95 latency alerts.
     HTTP_REQUEST_DURATION.labels(
         method=request.method,
         endpoint=request.url.path,
@@ -113,29 +81,20 @@ async def request_context_middleware(request: Request, call_next):
 
     response.headers["X-Process-Time"] = f"{duration:.4f}"
     response.headers["X-Request-ID"] = request_id
-    # Low-hanging security headers — no reason not to send them.
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     return response
 
-
-# ---- Exception handlers ------------------------------------------------------
-# All three return the same ErrorResponse shape so clients can parse errors
-# uniformly regardless of whether the failure was a 404, 422, or 500.
-
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
-    """Shape known HTTP errors (404, 403, 503, …) into our ErrorResponse envelope."""
     logger.warning("HTTP exception", status_code=exc.status_code, detail=exc.detail)
     return JSONResponse(
         status_code=exc.status_code,
         content=ErrorResponse(message=str(exc.detail)).model_dump(),
     )
 
-
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """Convert Pydantic validation failures (422) into a JSON error response."""
     logger.warning("Request validation failed", errors=exc.errors())
     return JSONResponse(
         status_code=422,
@@ -144,22 +103,15 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         ).model_dump(),
     )
 
-
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    """Catch-all so raw tracebacks never leak to clients.
 
-    The structured logger captures ``exc_info`` which preserves the full
-    traceback in Cloud Logging for postmortem debugging.
-    """
     logger.error("Unhandled exception", exc_info=True)
     return JSONResponse(
         status_code=500,
         content=ErrorResponse(message="Internal server error").model_dump(),
     )
 
-
-# ---- Route registration ------------------------------------------------------
 app.include_router(personas.router, prefix="/api/v1/personas", tags=["Personas"])
 app.include_router(ingestion.router, prefix="/api/v1/ingestion", tags=["Ingestion Hub"])
 app.include_router(deduplication.router, prefix="/api/v1/deduplication", tags=["Deduplication"])
@@ -170,37 +122,22 @@ app.include_router(newsletter_router, prefix="/api/v1/newsletter", tags=["Newsle
 app.include_router(admin.router, prefix="/api/v1/admin", tags=["Admin"])
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])
 
-
-# ---- System endpoints --------------------------------------------------------
-
 @app.get("/", tags=["System"], include_in_schema=False)
 async def root():
-    """Friendly landing route — Cloud Run's default probe hits `/`."""
     return {"service": "curateai-backend", "status": "ok", "docs": "/docs"}
 
 
 @app.get("/livez", tags=["System"])
 async def liveness():
-    """Cheap liveness probe.
 
-    Returns 200 as long as the event loop is responsive. Kept deliberately
-    free of downstream dependency checks — if Snowflake blips we do NOT want
-    Cloud Run to restart the container, we just want to fail reads gracefully.
-    """
     return {"status": "alive"}
-
 
 @app.get("/api/v1/health", tags=["System"])
 async def health_check(
     settings: Settings = Depends(get_settings),
     db: snowflake.connector.SnowflakeConnection = Depends(get_db_connection),
 ):
-    """Readiness probe — verifies we can actually serve traffic.
 
-    Runs a trivial ``SELECT CURRENT_VERSION()`` against Snowflake so a 200 here
-    implies credentials are valid, the warehouse is reachable, and the pool is
-    healthy. Returns 503 on any failure so upstream load balancers route away.
-    """
     try:
         cursor = db.cursor()
         cursor.execute("SELECT CURRENT_VERSION()")
@@ -218,26 +155,12 @@ async def health_check(
         logger.error("Snowflake health check failed", exc_info=True)
         raise HTTPException(status_code=503, detail="Database connection failed")
 
-
 @app.get("/metrics", tags=["System"])
 async def metrics():
-    """Prometheus scrape endpoint.
-
-    Serves the process-wide registry (HTTP latency, LLM token spend, LangGraph
-    node durations, …). Safe to expose on Cloud Run since it carries no PII;
-    protect behind IAP / allow-listed service accounts if that ever changes.
-    """
     return Response(content=generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
-
 
 @app.get("/api/v1/metrics/summary", tags=["System"])
 async def metrics_summary():
-    """Compact JSON snapshot of the most useful Prometheus metrics.
-
-    The `/metrics` endpoint returns raw text that's painful for a browser to
-    parse. This endpoint pre-aggregates the dashboard-worthy numbers so the
-    frontend metrics panel can render them directly.
-    """
     from prometheus_client.samples import Sample
 
     def _collect():
@@ -263,7 +186,6 @@ async def metrics_summary():
         """Return {label: {count, sum, avg}} for a histogram, grouped by label_name."""
         by_label: dict[str, dict[str, float]] = {}
         for s in m.get(name, []):
-            # Skip bucket samples — we only need count + sum to compute avg.
             if s.name.endswith("_bucket"):
                 continue
             label_key = "_".join(f"{k}={v}" for k, v in s.labels.items()) or "overall"
@@ -295,17 +217,10 @@ async def metrics_summary():
         },
     }
 
-
-# ---- MCP integration ---------------------------------------------------------
-# Mount FastMCP as a sub-application so the same container serves both REST and
-# the MCP tool surface at /api/v1/mcp/{sse,messages}. If the SDK's mount API
-# changes (it has before) we log loudly and keep serving REST — the rest of the
-# platform should not die because MCP wiring drifted.
 try:
     mcp_server.mount_to(app, prefix="/api/v1/mcp")
     logger.info("MCP server mounted", prefix="/api/v1/mcp")
 except AttributeError:
-    # Older FastMCP exposes .sse_app() instead of .mount_to(); try that path.
     try:
         app.mount("/api/v1/mcp", mcp_server.sse_app())
         logger.info("MCP server mounted via sse_app()", prefix="/api/v1/mcp")

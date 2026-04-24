@@ -3,7 +3,6 @@ import io
 import pdfplumber
 from pypdf import PdfReader
 from fastapi import UploadFile
-
 from app.core.logging_conf import get_logger
 
 logger = get_logger("app.services.parser")
@@ -39,12 +38,8 @@ class DocumentParserService:
 
     @classmethod
     async def extract_best_text(cls, file: UploadFile) -> tuple[str, float]:
-        """
-        Dynamically extracts text using both pdfplumber and pypdf concurrently or sequentially,
-        and selects the output providing the maximum valid character volume.
-        """
         raw_bytes = await file.read()
-        await file.seek(0) # Reset pointer
+        await file.seek(0) 
         
         logger.info("Benchmarking text extraction architectures", filename=file.filename)
         
@@ -55,9 +50,8 @@ class DocumentParserService:
                      pdfplumber_latency=lat_plumb, pdfplumber_chars=len(txt_plumb),
                      pypdf_latency=lat_pypdf, pypdf_chars=len(txt_pypdf))
         
-        # Fallback to the dense extractor
         best_text = txt_pypdf if len(txt_pypdf) >= len(txt_plumb) else txt_plumb
-        max_lat = max(lat_plumb, lat_pypdf) # we ran them sequentially here, so tracking max is fine
+        max_lat = max(lat_plumb, lat_pypdf) 
         
         if not best_text:
             logger.error("Both extraction engines returned zero text volume")

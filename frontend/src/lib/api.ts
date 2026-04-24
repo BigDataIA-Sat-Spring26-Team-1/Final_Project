@@ -830,6 +830,8 @@ export interface CompanyDetail {
   content_pillars?: string | null;
   competitors?: string | null;
   tone_of_voice?: string | null;
+  /** 10-dim content-affinity vector extracted by the LLM on profile save. */
+  content_affinity_weights?: Record<string, number> | null;
   created_at?: string | null;
   updated_at?: string | null;
 }

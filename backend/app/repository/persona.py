@@ -8,20 +8,12 @@ from app.core.logging_conf import get_logger
 logger = get_logger("app.repository.persona")
 
 class PersonaRepository:
-    """
-    Handles all Snowflake persistence for user personas.
-    Utilizes Snowflake VARIANT columns for flexible JSON storage of weights.
-    """
 
     @staticmethod
     def upsert_persona(conn: SnowflakeConnection, data: UserPersonaUpdate) -> str:
-        """
-        Performs a MERGE (upsert) into the user_personas table.
-        Ensures a user only has one active persona profile from the cold-start extraction.
-        """
+
         persona_id = str(uuid.uuid4())
         
-        # Convert Pydantic dict weights to JSON string for Snowflake VARIANT support
         weights_json = json.dumps(data.explicit_category_weights)
         
         query = """
@@ -70,9 +62,7 @@ class PersonaRepository:
 
     @staticmethod
     def get_persona(conn: SnowflakeConnection, user_id: str) -> Optional[dict]:
-        """
-        Fetches the user's explicit and behavioral persona details from Snowflake.
-        """
+
         query = """
         SELECT job_title, seniority, persona_archetype, bio_summary, explicit_category_weights, behavioral_category_weights
         FROM user_personas

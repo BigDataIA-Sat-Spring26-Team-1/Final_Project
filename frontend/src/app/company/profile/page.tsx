@@ -256,6 +256,8 @@ export default function CompanyProfilePage() {
           </div>
         ) : (
           <div className="glass rounded-[2rem] p-10 border border-white/5 space-y-8">
+            <AffinityChips weights={company?.content_affinity_weights ?? null} />
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <Field
                 label="Company Name"
@@ -506,5 +508,80 @@ function SelectField({
         ))}
       </select>
     </label>
+  );
+}
+
+function humanizeCategory(key: string): string {
+  return key
+    .split('_')
+    .map((w) =>
+      w === 'ai' || w === 'llms'
+        ? w.toUpperCase()
+        : w[0]?.toUpperCase() + w.slice(1),
+    )
+    .join(' ');
+}
+
+function AffinityChips({
+  weights,
+}: {
+  weights: Record<string, number> | null;
+}) {
+  // Read-only banner — the backend re-extracts this vector every time
+  // the profile is saved, so there's nothing to edit here. Showing it
+  // makes it obvious to the tenant operator why their Strategic Briefs
+  // emphasise one vocabulary set over another.
+  if (!weights || Object.keys(weights).length === 0) {
+    return (
+      <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] p-5 space-y-2">
+        <div className="text-[10px] font-black uppercase tracking-widest text-dim">
+          Content Affinity
+        </div>
+        <p className="text-xs text-dim italic">
+          Not yet extracted. Save this profile to have the LLM derive the
+          10-dim category weights that drive your Strategic Brief agent.
+        </p>
+      </div>
+    );
+  }
+  const top = Object.entries(weights)
+    .filter(([, v]) => v > 0.03)
+    .sort(([, a], [, b]) => b - a);
+  return (
+    <div className="rounded-xl border border-secondary/20 bg-gradient-to-br from-secondary/[0.06] via-transparent to-primary/[0.06] p-5 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="text-[10px] font-black uppercase tracking-widest text-secondary">
+          Content Affinity (10-dim taxonomy)
+        </div>
+        <div className="text-[10px] text-dim font-mono">
+          re-extracted on every profile save
+        </div>
+      </div>
+      <p className="text-xs text-dim">
+        Vocabulary distribution your Strategic Brief agent uses as a hard
+        constraint. Top-3 dominate headlines and keywords; categories
+        &lt;5% are forbidden from appearing.
+      </p>
+      <div className="flex flex-wrap gap-2 pt-1">
+        {top.map(([cat, w]) => (
+          <span
+            key={cat}
+            className={cn(
+              'px-3 py-1.5 rounded-xl text-xs font-bold border',
+              w >= 0.2
+                ? 'bg-primary/15 text-primary border-primary/30'
+                : w >= 0.1
+                  ? 'bg-secondary/10 text-secondary border-secondary/25'
+                  : 'bg-white/5 text-dim border-white/10',
+            )}
+          >
+            {humanizeCategory(cat)}
+            <span className="ml-2 text-[10px] opacity-75 tabular-nums">
+              {(w * 100).toFixed(0)}%
+            </span>
+          </span>
+        ))}
+      </div>
+    </div>
   );
 }

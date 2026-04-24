@@ -20,9 +20,7 @@ import {
   TrendingUp,
   Users,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
 
-import { ApiError, getPersona } from '@/lib/api';
 import { useAuth } from '@/components/AuthProvider';
 import { cn } from '@/lib/utils';
 
@@ -47,6 +45,10 @@ const ADMIN_ITEMS: NavItem[] = [
   { name: 'All Companies', href: '/admin/companies', icon: Building2 },
 ];
 
+// Onboarding is NOT in the nav — it's the forced landing page for USERs
+// without a persona (see AuthProvider's persona route guard). Once the
+// persona is saved, the user is routed to /user and the nav items below
+// activate.
 const USER_ITEMS: NavItem[] = [
   {
     name: 'My Feed',
@@ -59,13 +61,6 @@ const USER_ITEMS: NavItem[] = [
     href: '/newsletter',
     icon: Mail,
     enabledWhen: (ctx) => ctx.hasPersona === true,
-  },
-  {
-    name: 'Onboarding',
-    href: '/user/onboarding',
-    icon: Users,
-    // Once a persona exists the onboarding flow is frozen.
-    enabledWhen: (ctx) => ctx.hasPersona === false,
   },
   {
     name: 'My Persona',
@@ -82,28 +77,8 @@ const COMPANY_ITEMS: NavItem[] = [
 ];
 
 export function Navigation() {
-  const { user, logout } = useAuth();
+  const { user, hasPersona, logout } = useAuth();
   const pathname = usePathname();
-
-  // Look up the persona so USER links can be gated on onboarding progress.
-  const [hasPersona, setHasPersona] = useState<boolean | null>(null);
-  useEffect(() => {
-    const controller = new AbortController();
-    (async () => {
-      if (!user || user.role !== 'USER') {
-        setHasPersona(null);
-        return;
-      }
-      try {
-        await getPersona(user.id, controller.signal);
-        if (!controller.signal.aborted) setHasPersona(true);
-      } catch (err) {
-        if ((err as Error).name === 'AbortError') return;
-        if (err instanceof ApiError && err.status === 404) setHasPersona(false);
-      }
-    })();
-    return () => controller.abort();
-  }, [user]);
 
   if (!user) return null; // AppShell will render the loading state.
 

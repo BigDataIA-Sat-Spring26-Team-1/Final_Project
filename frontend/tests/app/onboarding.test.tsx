@@ -6,7 +6,34 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// Mock the Next.js router + AuthProvider hooks. The component calls both at
+// mount to hydrate the signed-in user id and redirect to /user after a
+// successful persona save; the test environment has neither an <AppRouter>
+// nor an <AuthProvider>, so we stub them out here.
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({
+    replace: vi.fn(),
+    push: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    refresh: vi.fn(),
+    prefetch: vi.fn(),
+  }),
+}));
+vi.mock('@/components/AuthProvider', () => ({
+  useAuth: () => ({
+    user: null,
+    status: 'authenticated',
+    hasPersona: null,
+    login: vi.fn(),
+    signup: vi.fn(),
+    logout: vi.fn(),
+    refresh: vi.fn(),
+    markPersonaPresent: vi.fn(),
+  }),
+}));
 
 import UserOnboarding from '@/app/user/onboarding/page';
 

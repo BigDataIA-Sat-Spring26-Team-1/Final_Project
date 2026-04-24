@@ -16,8 +16,10 @@ import {
   TriangleAlert,
 } from 'lucide-react';
 import NextLink from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
+import { useAuth } from '@/components/AuthProvider';
 import { PageWrapper } from '@/components/PageWrapper';
 import { Spinner } from '@/components/Spinner';
 import {
@@ -55,9 +57,18 @@ const MAX_FILE_BYTES = 10 * 1024 * 1024;
 
 export default function UserOnboarding() {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const router = useRouter();
+  const { user, markPersonaPresent } = useAuth();
 
   const [mode, setMode] = useState<OnboardingMode>('linkedin');
-  const [userId, setUserId] = useState('');
+  // Default the user id to the signed-in user — onboarding is now the
+  // forced landing page for USERs without a persona, so the target is
+  // always themselves. We keep the raw input visible for admin-style
+  // override but hydrate it from auth on mount.
+  const [userId, setUserId] = useState(user?.id ?? '');
+  useEffect(() => {
+    if (user?.id) setUserId(user.id);
+  }, [user?.id]);
   const [files, setFiles] = useState<File[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [result, setResult] = useState<BatchPersonaResponse | null>(null);
@@ -127,6 +138,12 @@ export default function UserOnboarding() {
         explicit_category_weights: manualWeights,
       });
       setManualSuccess(`Persona ${out.persona_id.slice(0, 8)}… saved for ${out.user_id}.`);
+      // Flip the AuthProvider gate so route guard stops forcing /onboarding;
+      // the actual navigation to /user is driven by an explicit button in
+      // the success UI (see manualSuccess branch in the page body).
+      if (user?.id && userId.trim() === user.id) {
+        markPersonaPresent();
+      }
     } catch (err) {
       setError(
         err instanceof ApiError
@@ -175,6 +192,15 @@ export default function UserOnboarding() {
     try {
       const response = await extractPersonas(userId.trim(), files);
       setResult(response);
+      // Persona is persisted by the backend (PersonaService.process_batch
+      // calls upsert_persona). Flip the AuthProvider gate so the route
+      // guard stops pinning this user to /onboarding, but DO NOT auto-
+      // redirect — the user needs to explicitly confirm via the
+      // "Continue to My Feed" button inside ExtractionResult below.
+      const succeeded = response.results.some((r) => r.is_success && r.data);
+      if (succeeded && user?.id && userId.trim() === user.id) {
+        markPersonaPresent();
+      }
     } catch (err) {
       setError(
         err instanceof ApiError
@@ -434,9 +460,20 @@ export default function UserOnboarding() {
               </button>
 
               {manualSuccess && (
-                <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 flex items-start gap-3">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
-                  <p className="text-sm text-emerald-200">{manualSuccess}</p>
+                <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 space-y-3">
+                  <div className="flex items-start gap-3">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                    <p className="text-sm text-emerald-200">{manualSuccess}</p>
+                  </div>
+                  {user?.id && userId.trim() === user.id && (
+                    <button
+                      type="button"
+                      onClick={() => router.replace('/user')}
+                      className="w-full inline-flex items-center justify-center gap-2 bg-primary hover:bg-primary/90 text-primary-foreground px-5 py-2.5 rounded-xl text-sm font-bold transition"
+                    >
+                      Continue to My Feed <ArrowRight className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -454,6 +491,10 @@ export default function UserOnboarding() {
               data={firstSuccessful?.data ?? null}
               allResults={result.results}
               totalLatency={result.overall_latency_seconds}
+              canContinue={Boolean(
+                firstSuccessful?.data && user?.id && userId.trim() === user.id,
+              )}
+              onContinue={() => router.replace('/user')}
             />
           )}
         </div>
@@ -516,10 +557,15 @@ function ExtractionResult({
   data,
   allResults,
   totalLatency,
+  canContinue,
+  onContinue,
 }: {
   data: PersonaExtractionResult | null;
   allResults: SinglePersonaExtractionResponse[];
   totalLatency: number;
+  /** True when the extracted persona belongs to the currently signed-in user. */
+  canContinue: boolean;
+  onContinue: () => void;
 }) {
   return (
     <div className="w-full max-w-md space-y-4 text-left rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-6">
@@ -528,6 +574,12 @@ function ExtractionResult({
         <h4 className="font-bold">Extraction complete</h4>
         <span className="ml-auto text-xs font-mono text-dim">{totalLatency.toFixed(1)}s</span>
       </div>
+      {data && (
+        <p className="text-xs text-emerald-200/90">
+          Persona saved to Snowflake — your feed and newsletter agents will
+          use this profile going forward.
+        </p>
+      )}
 
       {data ? (
         <div className="space-y-3 text-sm">
@@ -567,6 +619,16 @@ function ExtractionResult({
               ))}
           </ul>
         </details>
+      )}
+
+      {canContinue && (
+        <button
+          type="button"
+          onClick={onContinue}
+          className="mt-2 w-full inline-flex items-center justify-center gap-2 bg-primary hover:bg-primary/90 text-primary-foreground px-5 py-3 rounded-xl text-sm font-bold transition shadow-lg shadow-primary/20"
+        >
+          Continue to My Feed <ArrowRight className="w-4 h-4" />
+        </button>
       )}
     </div>
   );

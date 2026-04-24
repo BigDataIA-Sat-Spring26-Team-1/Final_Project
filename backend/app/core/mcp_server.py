@@ -1,18 +1,6 @@
-"""FastMCP tool surface for CurateAI.
-
-Exposes the same retrieval + agent primitives as the REST API so Claude
-Desktop (or any MCP client) can drive the platform. Mounted at
-``/api/v1/mcp`` by ``app.main`` — the transport is SSE by default.
-
-When you add a new tool here, keep the docstring focused on the *intent*.
-That string is what the MCP client shows users — it should read like a
-product description, not an implementation note.
-"""
 from datetime import date as _date
 from typing import Any, Dict, List, Literal, Optional
-
 from mcp.server.fastmcp import FastMCP
-
 from app.api.newsletter import generate_b2c_newsletter
 from app.core.logging_conf import get_logger
 from app.core.schemas import B2CNewsletterRequest
@@ -25,24 +13,13 @@ logger = get_logger("app.mcp_server")
 
 mcp_server = FastMCP("CurateAI Intelligence")
 
-
-# ---- System --------------------------------------------------------------
-
 @mcp_server.tool()
 async def health_check_mcp() -> str:
-    """Return a heartbeat string — useful as a connectivity probe from Claude."""
     return "CurateAI MCP Server is linked and healthy."
-
-
-# ---- Personas ------------------------------------------------------------
 
 @mcp_server.tool()
 async def get_user_archetype(user_id: str) -> str:
-    """Return the professional archetype assigned to a user at onboarding.
 
-    Values are one of: ML_RESEARCHER, AI_SYSTEMS_ENGINEER, DATA_STRATEGIST,
-    PRODUCT_LEAD_AI, POLICY_ETHICS_GURU, GENERAL_TECH_ENVELOPE.
-    """
     db_gen = get_db_connection()
     db = next(db_gen)
     try:
@@ -56,22 +33,13 @@ async def get_user_archetype(user_id: str) -> str:
         except StopIteration:
             pass
 
-
-# ---- Retrieval -----------------------------------------------------------
-
 @mcp_server.tool()
 async def filter_articles(
     user_id: str,
     category: Optional[str] = None,
     limit: int = 10,
 ) -> List[Dict[str, Any]]:
-    """Return the top-N personalized articles for a user.
 
-    Ordered by the persona-weighted recommendation score. ``category`` is a
-    soft filter — when provided, categories matching case-insensitively bubble
-    to the top without dropping the rest. Defaults to 10 (the "personalized"
-    row in the daily newsletter).
-    """
     db_gen = get_db_connection()
     db = next(db_gen)
     try:
@@ -88,15 +56,10 @@ async def filter_articles(
     results = result.get("results", [])
     if category:
         needle = category.strip().lower()
-        # Stable sort pushes category matches up without discarding the rest,
-        # so callers can still see adjacent clusters when the filter is sparse.
         results.sort(
             key=lambda r: 0 if needle in (k.lower() for k in (r.get("categories") or {}).keys()) else 1,
         )
     return results[:limit]
-
-
-# ---- Trends --------------------------------------------------------------
 
 def _read_ranked_clusters(
     db,
@@ -105,7 +68,6 @@ def _read_ranked_clusters(
     status: Optional[str],
     target_date: Optional[str],
 ) -> List[Dict[str, Any]]:
-    """Shared reader for the ranked cluster snapshot."""
     cur = db.cursor()
     query = """
         SELECT id, primary_title, primary_summary, trend_status,
@@ -152,19 +114,13 @@ def _read_ranked_clusters(
         )
     return results
 
-
 @mcp_server.tool()
 async def get_keyword_trends(
     limit: int = 10,
     status: Optional[str] = None,
     date: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Return the top-N ranked story clusters from the latest ranking pass.
 
-    ``status`` filters by ``trend_status`` (BREAKING, TRENDING, VIRAL, ...).
-    ``date`` (YYYY-MM-DD) pins the snapshot to a historical ranking day. This
-    is a read against the ranked snapshot — it does NOT recompute the ranking.
-    """
     db_gen = get_db_connection()
     db = next(db_gen)
     try:
@@ -175,20 +131,12 @@ async def get_keyword_trends(
         except StopIteration:
             pass
 
-
 @mcp_server.tool()
 async def get_common_highlights(
     date: Optional[str] = None,
     limit: int = 20,
 ) -> List[Dict[str, Any]]:
-    """Return the top-N common trending stories for a day — same for every user.
 
-    This is the universal "headline deck" that sits above per-user
-    recommendations in the daily newsletter. Ranking is by
-    ``final_trend_score`` with ``cluster_size`` as the tiebreaker so
-    multi-source stories outrank single-source ones at the same score.
-    ``date`` defaults to today.
-    """
     target = date or _date.today().isoformat()
     db_gen = get_db_connection()
     db = next(db_gen)
@@ -200,21 +148,12 @@ async def get_common_highlights(
         except StopIteration:
             pass
 
-
-# ---- Generation ----------------------------------------------------------
-
 @mcp_server.tool()
 async def generate_user_newsletter(
     user_id: str,
     mode: Literal["fast", "polished"] = "polished",
 ) -> Dict[str, Any]:
-    """Return today's newsletter for the user — idempotent per day.
 
-    If a newsletter already exists for today it is served as-is (no LLM call).
-    Otherwise the B2C LangGraph runs and the draft is persisted. The response
-    includes the HTML, the edition date, and whether this call regenerated
-    anything (``already_generated``).
-    """
     db_gen = get_db_connection()
     db = next(db_gen)
     try:
@@ -230,7 +169,7 @@ async def generate_user_newsletter(
             "already_generated": response.already_generated,
             "execution_path_taken": response.execution_path_taken,
         }
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.error("MCP newsletter generation failed", user_id=user_id, error=str(exc))
         return {"status": "ERROR", "error": str(exc)}
     finally:
@@ -239,19 +178,11 @@ async def generate_user_newsletter(
         except StopIteration:
             pass
 
-
 @mcp_server.tool()
 async def generate_b2b_brief(
     company_id: str,
     date: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Return today's B2B intelligence brief for a company — idempotent per day.
-
-    Serves the existing brief for ``date`` (defaults to today) when one exists
-    in Snowflake. On a miss for today, the agent runs, persists, and returns
-    the fresh brief. On a miss for a past date the response is empty — past
-    days are read-only.
-    """
     target = date or _date.today().isoformat()
     db_gen = get_db_connection()
     db = next(db_gen)
@@ -284,7 +215,6 @@ async def generate_b2b_brief(
         except StopIteration:
             pass
 
-    # Past-date miss: don't run the agent, just surface the empty state.
     if target != _date.today().isoformat():
         return {
             "status": "NOT_FOUND",
@@ -294,7 +224,7 @@ async def generate_b2b_brief(
         }
 
     try:
-        from app.api.b2b import _persist_brief  # local import to avoid cycle at import time
+        from app.api.b2b import _persist_brief  
 
         graph = get_b2b_report_graph()
         state = await graph.ainvoke({"user_id": company_id})
@@ -330,6 +260,6 @@ async def generate_b2b_brief(
             "generated_at": generated_at or None,
             "already_generated": False,
         }
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  
         logger.error("MCP B2B brief generation failed", company_id=company_id, error=str(exc))
         return {"status": "ERROR", "error": str(exc)}

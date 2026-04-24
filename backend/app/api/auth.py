@@ -1,25 +1,10 @@
-"""Authentication endpoints.
-
-Public surface:
-  * ``POST /auth/signup`` — create a USER or COMPANY account + return a JWT.
-  * ``POST /auth/login``  — verify credentials + return a JWT.
-  * ``GET  /auth/me``     — echo the current user from the Bearer token.
-
-Error semantics for ``/login`` intentionally differentiate
-"no account with this email" vs "incorrect password" — the product ask is a
-clear demo UX over the usual user-enumeration-hardening trade-off. Brute
-force is bounded separately via the ``slowapi`` rate limit.
-"""
 from __future__ import annotations
-
 import re
 import uuid
 from typing import Any, Dict, Literal, Optional
-
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 from snowflake.connector import SnowflakeConnection
-
 from app.core.limiter import limiter
 from app.core.logging_conf import get_logger
 from app.db.snowflake import get_db_connection
@@ -35,13 +20,6 @@ logger = get_logger("app.api.auth")
 router = APIRouter()
 
 _EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
-
-
-# ---------------------------------------------------------------------------
-# Request / response shapes
-# ---------------------------------------------------------------------------
-
-
 class SignupRequest(BaseModel):
     email: str = Field(..., min_length=3, max_length=255)
     password: str = Field(..., min_length=8, max_length=128)
@@ -50,7 +28,6 @@ class SignupRequest(BaseModel):
         default="USER",
         description="ADMIN cannot self-signup — seed that account server-side.",
     )
-    # Only consulted when role == 'COMPANY'.
     company_name: Optional[str] = Field(default=None, max_length=255)
     company_domain: Optional[str] = Field(default=None, max_length=255)
     company_industry: Optional[str] = Field(default=None, max_length=255)
@@ -65,11 +42,9 @@ class SignupRequest(BaseModel):
     @field_validator("password")
     @classmethod
     def _password_strength(cls, value: str) -> str:
-        # Same rule the frontend enforces in regex: 8+ chars, 1 letter, 1 digit.
         if not re.search(r"[A-Za-z]", value) or not re.search(r"\d", value):
             raise ValueError("password must include at least one letter and one digit")
         return value
-
 
 class LoginRequest(BaseModel):
     email: str
@@ -80,7 +55,6 @@ class LoginRequest(BaseModel):
     def _lowercase(cls, value: str) -> str:
         return value.strip().lower()
 
-
 class AuthUser(BaseModel):
     id: str
     email: str
@@ -89,24 +63,16 @@ class AuthUser(BaseModel):
     company_id: Optional[str] = None
     company_name: Optional[str] = None
 
-
 class AuthEnvelope(BaseModel):
     access_token: str
     token_type: str = "Bearer"
     expires_in: int
     user: AuthUser
 
-
-# ---------------------------------------------------------------------------
-# Dependency — decode the Bearer token
-# ---------------------------------------------------------------------------
-
-
 def get_current_user(
     authorization: Optional[str] = Header(default=None),
     db: SnowflakeConnection = Depends(get_db_connection),
 ) -> AuthUser:
-    """FastAPI dependency: returns the authenticated user or raises 401."""
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Missing bearer token.")
     token = authorization.split(" ", 1)[1].strip()
@@ -142,10 +108,7 @@ def get_current_user(
         company_name=row[5],
     )
 
-
 def require_role(*roles: str):
-    """Factory for a dependency that enforces a role allow-list."""
-
     allowed = {r.upper() for r in roles}
 
     def _checker(current: AuthUser = Depends(get_current_user)) -> AuthUser:
@@ -154,12 +117,6 @@ def require_role(*roles: str):
         return current
 
     return _checker
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _envelope(row: Any, company_name: Optional[str] = None) -> AuthEnvelope:
     user = AuthUser(
@@ -171,18 +128,11 @@ def _envelope(row: Any, company_name: Optional[str] = None) -> AuthEnvelope:
         company_name=company_name,
     )
     token = issue_token(user.id, user.role, {"email": user.email})
-    # Keep TTL in sync with the default in auth.py without re-exporting it.
     return AuthEnvelope(
         access_token=token,
         expires_in=4 * 60 * 60,
         user=user,
     )
-
-
-# ---------------------------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------------------------
-
 
 @router.post("/signup", response_model=AuthEnvelope, status_code=201)
 @limiter.limit("10/minute")
@@ -241,7 +191,6 @@ async def signup(
         company_name=payload.company_name if payload.role == "COMPANY" else None,
     )
 
-
 @router.post("/login", response_model=AuthEnvelope)
 @limiter.limit("10/minute")
 async def login(
@@ -262,8 +211,6 @@ async def login(
     )
     row = cur.fetchone()
     if not row:
-        # Intentional: distinguishes unknown email from bad password for a
-        # clearer demo flow. Swap to a generic 401 if we harden later.
         raise HTTPException(status_code=404, detail="No account with this email.")
 
     if not verify_password(payload.password, row[5] or ""):
@@ -271,7 +218,6 @@ async def login(
 
     logger.info("Login", user_id=row[0], role=row[3])
     return _envelope(row[:5], company_name=row[6])
-
 
 @router.get("/me", response_model=AuthUser)
 async def me(current: AuthUser = Depends(get_current_user)) -> AuthUser:

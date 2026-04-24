@@ -1,4 +1,3 @@
-# Aggregated list of high-signal technology and AI sources derived from verified prototypes.
 RSS_FEEDS = [
     "https://techcrunch.com/feed/",
     "https://www.theverge.com/rss/index.xml",
@@ -33,7 +32,6 @@ RSS_FEEDS = [
     "https://www.microsoft.com/en-us/research/feed/"
 ]
 
-# Reddit & HackerNews specific API sources (to be implemented in future phases)
 SOCIAL_SOURCES = {
     "reddit": ["r/MachineLearning", "r/ArtificialIntelligence", "r/Singularity"],
     "hn": "https://hacker-news.firebaseio.com/v0/topstories.json"
