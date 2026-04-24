@@ -337,15 +337,23 @@ async def render_personalized_html(
 def _resolve_recipient(
     user: Dict[str, Any], test_recipient: str
 ) -> Optional[Dict[str, str]]:
+    """Pick where the newsletter actually gets mailed to.
+
+    The real signed-in user's email always wins. `MAILERSEND_TEST_RECIPIENT`
+    is only a fallback for seed accounts that have no email on file (e.g.
+    early demo users). Previously it overrode every recipient, which
+    caused Arjun's "Send to My Inbox" to deliver to the ops test
+    address instead of his own.
+    """
+    email = (user.get("email") or "").strip()
+    if email:
+        return {"email": email, "name": user.get("full_name") or email}
     if test_recipient:
         return {
             "email": test_recipient,
-            "name": user.get("full_name") or user.get("email") or "Test Reader",
+            "name": user.get("full_name") or "Test Reader",
         }
-    email = user.get("email")
-    if not email:
-        return None
-    return {"email": email, "name": user.get("full_name") or email}
+    return None
 
 def _load_stored_html(
     db: SnowflakeConnection, user_id: str, edition_date: str
