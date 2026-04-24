@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import html as html_lib
+import re
 from datetime import date as _date
 from typing import Any, Dict, List, Optional
 from snowflake.connector import SnowflakeConnection
@@ -397,6 +398,35 @@ def _persist_rendered_html(
     db.commit()
 
 
+_PERSONAL_COUNT_RE = re.compile(r"Top\s+(\d+)\s+personalized picks", re.IGNORECASE)
+_COMMON_COUNT_RE = re.compile(r"Top\s+(\d+)\s+trending", re.IGNORECASE)
+
+
+def _counts_from_html(html: str) -> tuple[int, int]:
+    """Recover (personal_count, common_count) from a stored newsletter body.
+
+    The template always emits ``Top {N} personalized picks`` and
+    ``Top {N} trending across every feed`` so a simple regex recovers both.
+    Used when we serve a cached row — the counts weren't persisted as
+    separate columns, and showing 0/0 in the header while the body has
+    real content is misleading."""
+    personal = 0
+    common = 0
+    m = _PERSONAL_COUNT_RE.search(html or "")
+    if m:
+        try:
+            personal = int(m.group(1))
+        except ValueError:
+            pass
+    m = _COMMON_COUNT_RE.search(html or "")
+    if m:
+        try:
+            common = int(m.group(1))
+        except ValueError:
+            pass
+    return personal, common
+
+
 async def get_or_render_newsletter_html(
     user_id: str, edition_date: str, db: SnowflakeConnection
 ) -> Optional[Dict[str, Any]]:
@@ -410,12 +440,13 @@ async def get_or_render_newsletter_html(
     stored = _load_stored_html(db, user_id, edition_date)
     if stored:
         user = _load_user_context(db, user_id)
+        personal, common = _counts_from_html(stored)
         return {
             "user": user,
             "html": stored,
             "text": stored,
-            "common_count": 0,
-            "personal_count": 0,
+            "common_count": common,
+            "personal_count": personal,
             "cached": True,
         }
 

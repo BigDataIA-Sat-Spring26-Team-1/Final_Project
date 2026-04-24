@@ -284,18 +284,9 @@ export default function UserOnboarding() {
             </p>
           </div>
 
-          {/* Minimal user_id input — swap for real auth once login is in place. */}
-          <label className="w-full max-w-md space-y-2 text-left">
-            <span className="text-xs uppercase tracking-widest text-dim font-bold">User ID</span>
-            <input
-              type="text"
-              value={userId}
-              onChange={(e) => setUserId(e.target.value)}
-              placeholder="e.g. user-demo-001"
-              disabled={isSubmitting}
-              className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm outline-none focus:border-primary/40"
-            />
-          </label>
+          {/* user_id is resolved from the auth context — no need to
+              surface the internal Snowflake id in the UI. The state still
+              drives every request body below. */}
 
           {mode !== 'manual' && (
             <>
