@@ -223,7 +223,7 @@ function B2CArchive() {
       <div className="glass rounded-3xl p-6 border border-white/5 flex items-center gap-4 flex-wrap relative z-[60] overflow-visible">
         <Mail className="w-5 h-5 text-secondary" />
         <span className="text-sm font-bold">Select a user</span>
-        <UserSwitcher currentUserId={userId || null} onSelect={(id) => setUserId(id)} />
+        <UserSwitcher currentUserId={userId || null} onSelect={(id) => setUserId(id)} readersOnly />
         <div className="flex-1" />
         <button
           type="button"

@@ -8,15 +8,20 @@ import type { UserListItem } from '@/lib/api';
 interface UserSwitcherProps {
   currentUserId: string | null;
   onSelect: (userId: string) => void;
+  /** When true, filters the list to reader (USER-role) accounts only.
+   * Used on the admin B2C archive so company/admin rows don't pollute
+   * a newsletter picker that only makes sense for readers. */
+  readersOnly?: boolean;
 }
 
-export function UserSwitcher({ currentUserId, onSelect }: UserSwitcherProps) {
+export function UserSwitcher({ currentUserId, onSelect, readersOnly = false }: UserSwitcherProps) {
   const [users, setUsers] = useState<UserListItem[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const currentUser = users.find(u => u.id === currentUserId);
+  const filtered = readersOnly ? users.filter((u) => u.role === 'USER') : users;
+  const currentUser = filtered.find(u => u.id === currentUserId);
 
   useEffect(() => {
     const fetchUsers = async () => {
@@ -61,11 +66,11 @@ export function UserSwitcher({ currentUserId, onSelect }: UserSwitcherProps) {
             </div>
           ) : error ? (
             <div className="p-4 text-sm text-red-600">{error}</div>
-          ) : users.length === 0 ? (
+          ) : filtered.length === 0 ? (
             <div className="p-4 text-sm text-slate-500">No users found</div>
           ) : (
             <ul className="max-h-64 overflow-y-auto">
-              {users.map(user => (
+              {filtered.map(user => (
                 <li key={user.id}>
                   <button
                     onClick={() => handleSelect(user.id)}
