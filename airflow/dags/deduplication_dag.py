@@ -107,6 +107,44 @@ def persist_clusters(**context):
     return {"created": len(cluster_ids), "linked": total_linked}
 
 
+def classify_new_articles(**context):
+    """Fill articles_raw.internal_category_weights for any raw row that
+    doesn't have it yet.
+
+    Without this, TrendService.rank_daily_clusters aggregates over NULLs
+    and every cluster ends up with category_weights = {} — which makes
+    the like/dislike feedback multiplication in record_article_feedback
+    collapse to zero and no behavioural drift ever accumulates. Runs
+    inside the same DAG as dedup so freshly-ingested articles are
+    classified within the hour."""
+    ensure_backend_on_path()
+    from app.db.snowflake import get_db_connection
+    from app.services.article_service import ArticleOrchestratorService
+
+    batch_size = 200
+    max_batches = 12  # safety cap: ~2,400 articles/hour worst case
+    processed_total = 0
+    db_gen = get_db_connection()
+    db = next(db_gen)
+    try:
+        for _ in range(max_batches):
+            result = _run_async(
+                ArticleOrchestratorService.classify_pending_articles(db, batch_size=batch_size)
+            )
+            done = result.get("total", 0)
+            if done == 0:
+                break
+            processed_total += result.get("success", 0)
+        log.info("Article classification complete: classified=%d", processed_total)
+    finally:
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
+
+    return {"classified": processed_total}
+
+
 with DAG(
     dag_id="deduplication_dag",
     default_args=default_args(),
@@ -119,5 +157,6 @@ with DAG(
     t_fetch = PythonOperator(task_id="fetch_unclustered", python_callable=fetch_unclustered)
     t_cluster = PythonOperator(task_id="cluster_articles", python_callable=cluster_articles)
     t_persist = PythonOperator(task_id="persist_clusters", python_callable=persist_clusters)
+    t_classify = PythonOperator(task_id="classify_new_articles", python_callable=classify_new_articles)
 
-    t_fetch >> t_cluster >> t_persist
+    t_fetch >> t_cluster >> t_persist >> t_classify
