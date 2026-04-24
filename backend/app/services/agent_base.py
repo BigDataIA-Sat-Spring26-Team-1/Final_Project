@@ -21,18 +21,19 @@ def track_node_latency(node_func: Callable) -> Callable:
             )
     return wrapper
 
-class AgentState(TypedDict):
+class AgentState(TypedDict, total=False):
     user_id: str
     execution_mode: str
     user_persona: Dict[str, Any]
-    
+    edition_date: str
+
     search_query: str
     retrieved_articles: List[Dict[str, Any]]
-    
+
     messages: List[Dict[str, str]]
     next_step: str
-    
-    generated_content: str 
+
+    generated_content: str
     status: str
     metadata: Dict[str, Any]
 

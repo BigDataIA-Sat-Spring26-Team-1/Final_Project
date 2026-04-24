@@ -199,6 +199,33 @@ class NewsletterPreviewResponse(BaseModel):
     common_count: int = 0
     personal_count: int = 0
 
+@router.get("/available-dates")
+async def available_dates(
+    user_id: str,
+    limit: int = 30,
+    db: SnowflakeConnection = Depends(get_db_connection),
+) -> Dict[str, Any]:
+    """Edition dates (YYYY-MM-DD) for which this user actually has a
+    generated newsletter — lets the frontend surface only real dates
+    instead of a raw date picker that implies every day is available."""
+    cur = db.cursor()
+    cur.execute(
+        """
+        SELECT DISTINCT edition_date
+        FROM newsletters
+        WHERE user_id = %s
+          AND COALESCE(final_content, draft_content) IS NOT NULL
+          AND LENGTH(TRIM(COALESCE(final_content, draft_content))) > 0
+        ORDER BY edition_date DESC
+        LIMIT %s
+        """,
+        (user_id, limit),
+    )
+    rows = cur.fetchall()
+    dates = [_iso(r[0]) for r in rows if r and r[0] is not None]
+    return {"user_id": user_id, "dates": dates}
+
+
 @router.get("/preview", response_model=NewsletterPreviewResponse)
 async def preview_newsletter_email(
     user_id: str,
@@ -223,10 +250,32 @@ async def preview_newsletter_email(
     sent_at = _iso(row[0]) if row and row[0] is not None else None
     recipient = row[1] if row else None
     stored_html = ((row[2] if row else None) or (row[3] if row else None) or "").strip()
+
+    # Historical editions must come from a persisted row. Live-rendering a
+    # past date would pull *current* articles from Qdrant — which is what
+    # made the archive look like it was "defaulting to today's articles"
+    # when no newsletter had been generated for that day.
+    if target < today:
+        if not stored_html:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No newsletter was generated for {target}.",
+            )
+        return NewsletterPreviewResponse(
+            user_id=user_id,
+            edition_date=target,
+            html_content=stored_html,
+            already_sent=sent_at is not None,
+            sent_at=sent_at,
+            recipient=recipient,
+            common_count=0,
+            personal_count=0,
+        )
+
     rendered = None
     try:
         rendered = await render_personalized_html(user_id, target, db)
-    except Exception as exc:  
+    except Exception as exc:
         logger.warning(
             "Preview render failed; will fall back to stored copy",
             user_id=user_id,

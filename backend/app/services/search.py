@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import date as _date
 from typing import List, Dict, Any, Optional
 from app.core.logging_conf import get_logger
@@ -8,12 +9,41 @@ from snowflake.connector import SnowflakeConnection
 
 logger = get_logger("app.services.search")
 
+_ARXIV_TITLE_VERSION_RE = re.compile(r"\s*\(v\d+\)\s*$", re.IGNORECASE)
+_TITLE_PUNCT_RE = re.compile(r"[^\w\s]")
+
+
+def _normalize_title(title: str) -> str:
+    if not title:
+        return ""
+    t = _ARXIV_TITLE_VERSION_RE.sub("", title).lower().strip()
+    t = _TITLE_PUNCT_RE.sub("", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _dedup_by_title(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Keep first occurrence of each normalized title. Upstream URL/semantic
+    dedup misses same-title-different-cluster-id rows produced by legacy
+    ingestion before the arXiv version-stripping went in."""
+    seen: set = set()
+    deduped: List[Dict[str, Any]] = []
+    for r in results:
+        key = _normalize_title(r.get("title", ""))
+        if not key:
+            deduped.append(r)
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(r)
+    return deduped
+
 def _filter_by_edition_date(
     results: List[Dict[str, Any]],
     edition_date: Optional[str],
     limit: int,
     db: Optional[SnowflakeConnection] = None,
-    window_days: int = 1,
+    window_days: int = 0,
 ) -> List[Dict[str, Any]]:
     if not edition_date or db is None:
         return results[:limit]
@@ -355,6 +385,7 @@ class SearchService:
             except Exception as e: 
                 logger.warning("Snowflake fallback recommendations failed", error=str(e))
 
+        results = _dedup_by_title(results)
         results = _filter_by_edition_date(results, edition_date, limit, db=db)
 
         return {

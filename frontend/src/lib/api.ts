@@ -508,6 +508,23 @@ export interface NewsletterPreviewResponse {
   personal_count: number;
 }
 
+export interface NewsletterAvailableDatesResponse {
+  user_id: string;
+  dates: string[];
+}
+
+export function getNewsletterAvailableDates(
+  userId: string,
+  limit = 30,
+  signal?: AbortSignal,
+): Promise<NewsletterAvailableDatesResponse> {
+  return request<NewsletterAvailableDatesResponse>('/api/v1/newsletter/available-dates', {
+    method: 'GET',
+    query: { user_id: userId, limit },
+    signal,
+  });
+}
+
 export function previewNewsletterEmail(
   userId: string,
   editionDate?: string,
