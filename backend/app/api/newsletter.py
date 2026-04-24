@@ -9,7 +9,11 @@ from app.core.logging_conf import get_logger
 from app.core.schemas import B2CNewsletterRequest, B2CNewsletterResponse
 from app.db.snowflake import get_db_connection
 from app.services.b2c_agent import get_b2c_newsletter_graph
-from app.services.mailer import render_personalized_html, send_newsletter_email
+from app.services.mailer import (
+    get_or_render_newsletter_html,
+    render_personalized_html,
+    send_newsletter_email,
+)
 
 logger = get_logger("newsletter_api")
 router = APIRouter()
@@ -199,6 +203,38 @@ class NewsletterPreviewResponse(BaseModel):
     common_count: int = 0
     personal_count: int = 0
 
+@router.get("/available-dates")
+async def available_dates(
+    user_id: str,
+    limit: int = 5,
+    db: SnowflakeConnection = Depends(get_db_connection),
+) -> Dict[str, Any]:
+    """Edition dates (YYYY-MM-DD) for which this user actually has a
+    generated newsletter — lets the frontend surface only real dates
+    instead of a raw date picker that implies every day is available.
+
+    Capped to 5 by default: no demo value in surfacing arbitrarily old
+    editions, and content-older-than-a-week can't be reliably rendered
+    anyway since the upstream cluster pool has drifted."""
+    limit = max(1, min(limit, 5))
+    cur = db.cursor()
+    cur.execute(
+        """
+        SELECT DISTINCT edition_date
+        FROM newsletters
+        WHERE user_id = %s
+          AND COALESCE(final_content, draft_content) IS NOT NULL
+          AND LENGTH(TRIM(COALESCE(final_content, draft_content))) > 0
+        ORDER BY edition_date DESC
+        LIMIT %s
+        """,
+        (user_id, limit),
+    )
+    rows = cur.fetchall()
+    dates = [_iso(r[0]) for r in rows if r and r[0] is not None]
+    return {"user_id": user_id, "dates": dates}
+
+
 @router.get("/preview", response_model=NewsletterPreviewResponse)
 async def preview_newsletter_email(
     user_id: str,
@@ -222,34 +258,25 @@ async def preview_newsletter_email(
     row = cur.fetchone()
     sent_at = _iso(row[0]) if row and row[0] is not None else None
     recipient = row[1] if row else None
-    stored_html = ((row[2] if row else None) or (row[3] if row else None) or "").strip()
-    rendered = None
+
+    # Single source of truth: stored row wins if present; otherwise for
+    # today we render once and persist so subsequent loads are stable
+    # across sessions/logins. Past dates with no row return 404.
     try:
-        rendered = await render_personalized_html(user_id, target, db)
-    except Exception as exc:  
+        rendered = await get_or_render_newsletter_html(user_id, target, db)
+    except Exception as exc:
         logger.warning(
-            "Preview render failed; will fall back to stored copy",
+            "Preview render failed",
             user_id=user_id,
             edition_date=target,
             error=str(exc),
         )
-
-    if not rendered and stored_html:
-        return NewsletterPreviewResponse(
-            user_id=user_id,
-            edition_date=target,
-            html_content=stored_html,
-            already_sent=sent_at is not None,
-            sent_at=sent_at,
-            recipient=recipient,
-            common_count=0,
-            personal_count=0,
-        )
+        rendered = None
 
     if not rendered:
         raise HTTPException(
             status_code=404,
-            detail=f"No newsletter data available for {target}.",
+            detail=f"No newsletter was generated for {target}.",
         )
 
     return NewsletterPreviewResponse(

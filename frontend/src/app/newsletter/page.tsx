@@ -13,6 +13,7 @@ import { PageWrapper } from '@/components/PageWrapper';
 import { useAuth } from '@/components/AuthProvider';
 import {
   ApiError,
+  getNewsletterAvailableDates,
   previewNewsletterEmail,
   sendNewsletterEmail,
   type NewsletterPreviewResponse,
@@ -29,6 +30,7 @@ export default function NewsletterPage() {
 
   const [preview, setPreview] = useState<NewsletterPreviewResponse | null>(null);
   const [editionDate, setEditionDate] = useState<string>(todayIso());
+  const [availableDates, setAvailableDates] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -65,6 +67,26 @@ export default function NewsletterPage() {
     loadPreview(userId, editionDate, controller.signal);
     return () => controller.abort();
   }, [userId, editionDate, loadPreview]);
+
+  useEffect(() => {
+    if (!userId) return;
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const res = await getNewsletterAvailableDates(userId, 5, controller.signal);
+        // Only surface dates the API actually returned; do not inject
+        // today unless the backend says today exists. An empty list is a
+        // valid state for a brand-new user who has no generated editions.
+        setAvailableDates(res.dates);
+      } catch (err) {
+        if ((err as Error).name === 'AbortError') return;
+      }
+    })();
+    return () => controller.abort();
+    // Re-fetch whenever a preview successfully lands — a fresh render
+    // for today will have just persisted a new row, so today should
+    // now show up in the dropdown.
+  }, [userId, preview?.edition_date]);
 
   // Inject the email HTML into an iframe so its inline styles don't bleed
   // into the site's dark chrome (and vice versa).
@@ -144,13 +166,23 @@ export default function NewsletterPage() {
           <div className="flex items-end gap-3 flex-wrap">
             <label className="flex items-center glass rounded-xl px-4 py-2 border border-white/5 focus-within:border-primary/40 gap-2">
               <Calendar className="w-4 h-4 text-dim" />
-              <input
-                type="date"
+              <select
                 value={editionDate}
-                max={todayIso()}
                 onChange={(e) => setEditionDate(e.target.value || todayIso())}
-                className="bg-transparent border-none outline-none text-sm text-white placeholder:text-dim"
-              />
+                className="bg-transparent border-none outline-none text-sm text-white [&>option]:bg-slate-900"
+                title="Only dates with a generated newsletter appear here."
+              >
+                {availableDates.length === 0 ? (
+                  <option value={editionDate}>{editionDate}</option>
+                ) : (
+                  availableDates.map((d) => (
+                    <option key={d} value={d}>
+                      {d}
+                      {d === todayIso() ? ' (today)' : ''}
+                    </option>
+                  ))
+                )}
+              </select>
             </label>
             <button
               type="button"

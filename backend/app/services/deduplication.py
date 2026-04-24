@@ -15,10 +15,16 @@ settings = get_settings()
 
 class DeduplicationService:
     
+    # arXiv papers land with per-version URLs (`/abs/2402.01234v1`,
+    # `/abs/2402.01234v2`, …). Without stripping the trailing `vN` the URL
+    # dedup treats each revision as a distinct article and the same paper
+    # re-appears in the feed 2–3 times.
+    _ARXIV_VERSION_RE = re.compile(r"(arxiv\.org/(?:abs|pdf)/[^/?#]+?)v\d+$", re.IGNORECASE)
+
     @staticmethod
     def normalize_url(url: str) -> str:
         """Removes tracking and non-essential routing segments from URLs."""
-        if not url: 
+        if not url:
             return ""
         try:
             parsed = urlparse(url)
@@ -26,7 +32,9 @@ class DeduplicationService:
             if netloc.startswith("www."):
                 netloc = netloc[4:]
             path = parsed.path.rstrip('/')
-            return f"{netloc}{path}"
+            key = f"{netloc}{path}"
+            stripped = DeduplicationService._ARXIV_VERSION_RE.sub(r"\1", key)
+            return stripped
         except Exception as e:
             logger.warning("URL normalization failed", url=url, error=str(e))
             return url

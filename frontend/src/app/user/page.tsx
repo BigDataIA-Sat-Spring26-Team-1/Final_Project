@@ -232,6 +232,7 @@ export default function UserDashboard() {
                           article={article}
                           userId={userId}
                           onFeedback={handleArticleFeedback}
+                          showRelevancy={false}
                         />
                       ))}
                     </>

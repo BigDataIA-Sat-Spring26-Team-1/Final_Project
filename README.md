@@ -26,7 +26,7 @@
 | **Data & Vector Store** | **Snowflake** (VARIANT columns, columnar analytics), **Qdrant Cloud** (1,536-dim cosine, HNSW) |
 | **Embeddings & LLM** | **OpenAI** `text-embedding-3-small` (embeddings), `gpt-4o-mini` (generation via LiteLLM) |
 | **Orchestration** | **Apache Airflow 2.x** (TaskFlow API, 8 production DAGs on GCE VM) |
-| **Email Delivery** | **MailerSend** (idempotent send, dev redirect rail) |
+| **Email Delivery** | **Gmail SMTP** (STARTTLS via App Password, idempotent send, dev redirect rail) |
 | **NLP** | **SpaCy** `en_core_web_sm` (NER-based keyword velocity) |
 | **MCP Server** | **FastMCP** (SSE transport) — 7 tools for Claude Desktop integration |
 | **Observability** | **Prometheus** (`prometheus_client`) — HTTP latency, LLM cost/tokens, agent node latency, DAG triggers |
@@ -111,7 +111,7 @@
 │   │   │   ├── b2b.py               # B2B brief generation + keyword velocity
 │   │   │   ├── deduplication.py     # Dedup DAG trigger
 │   │   │   ├── ingestion.py         # RSS / ArXiv / HN fetch trigger
-│   │   │   ├── newsletter.py        # B2C generation + MailerSend delivery
+│   │   │   ├── newsletter.py        # B2C generation + Gmail SMTP delivery
 │   │   │   ├── personas.py          # Persona extraction, feedback, CRUD
 │   │   │   ├── search.py            # Personalized recommendations
 │   │   │   └── trend.py             # Trend ranking trigger + reads
@@ -139,7 +139,7 @@
 │   │   │   ├── trend.py             # 4-tier cluster ranking
 │   │   │   ├── qdrant_sync.py       # Qdrant ↔️ Snowflake reconciliation
 │   │   │   ├── persona_service.py   # PDF → structured persona extraction
-│   │   │   ├── mailer.py            # MailerSend integration + HTML render
+│   │   │   ├── mailer.py            # Gmail SMTP delivery (STARTTLS) + HTML render
 │   │   │   ├── parser.py            # PDF → text extraction
 │   │   │   ├── llm.py               # LiteLLM gateway
 │   │   │   ├── llm_base.py          # Base LLM service (structured completions)
@@ -234,7 +234,7 @@
 - **Snowflake Account** (with permissions to create tables in `CURATE_AI.PUBLIC`)
 - **OpenAI API Key** (embeddings + LLM generation via LiteLLM)
 - **Qdrant Cloud account** (free tier covers ~10k points)
-- **MailerSend account** (optional — leave blank to disable sends locally)
+- **Gmail account with an [App Password](https://myaccount.google.com/apppasswords)** (optional — leave `SMTP_PASSWORD` blank to short-circuit newsletter sends locally)
 
 ### 2. Environment Setup
 
@@ -279,11 +279,17 @@ AIRFLOW_ADMIN_USERNAME=admin
 AIRFLOW_ADMIN_PASSWORD=<rotate before demo>
 AIRFLOW_ADMIN_EMAIL=you@example.com
 
-# MailerSend (newsletter delivery)
-MAILERSEND_API_KEY=               # leave blank locally to short-circuit sends
-MAILERSEND_FROM_EMAIL=info@test-q3enl6kez3742vwr.mlsender.net
-MAILERSEND_FROM_NAME=CurateAI Newsletter
-MAILERSEND_TEST_RECIPIENT=        # dev safety rail — redirects all mail here; leave EMPTY in prod
+# Gmail SMTP (newsletter delivery — replaces MailerSend)
+# Generate SMTP_PASSWORD as an App Password at https://myaccount.google.com/apppasswords.
+# Leave SMTP_USERNAME / SMTP_PASSWORD blank to short-circuit sends locally
+# (the send endpoint returns {"status": "MAILER_DISABLED"}).
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=                    # your Gmail address (personal or Workspace)
+SMTP_PASSWORD=                    # 16-char App Password, spaces stripped
+SMTP_FROM_EMAIL=                  # usually same as SMTP_USERNAME
+SMTP_FROM_NAME=CurateAI Newsletter
+SMTP_TEST_RECIPIENT=              # dev safety rail — redirects all mail here; leave EMPTY in prod
 
 # CORS
 CORS_ORIGINS=http://localhost:3000
@@ -363,7 +369,7 @@ Full runbook including GCE provisioning, firewall, budget alerting, and Cloud Ru
 | **Qdrant** | Qdrant Cloud | collection `articles`, 1,536-dim cosine |
 | **OpenAI** | managed | `text-embedding-3-small`, `gpt-4o-mini` |
 
-Secrets are stored in GCP Secret Manager (`SECRET_KEY`, `SNOWFLAKE_PASSWORD`, `OPENAI_API_KEY`, `QDRANT_API_KEY`, `MAILERSEND_API_KEY`, `AIRFLOW_PASSWORD`) and bound to the Cloud Run service account at deploy time.
+Secrets are stored in GCP Secret Manager (`SECRET_KEY`, `SNOWFLAKE_PASSWORD`, `OPENAI_API_KEY`, `QDRANT_API_KEY`, `SMTP_PASSWORD`, `AIRFLOW_PASSWORD`) and bound to the Cloud Run service account at deploy time.
 
 ---
 
@@ -381,7 +387,7 @@ Full interactive documentation is available at **`/docs`** (Swagger UI). All rou
 | **Ingestion** | `/api/v1/ingestion` | `POST /fetch-rss` | Triggers `ingestion_dag` (rate-limited 2/min) |
 | **Deduplication** | `/api/v1/deduplication` | `POST /process` | Triggers `deduplication_dag` |
 | **Trend** | `/api/v1/trend` | `POST /rank` `GET /top` | Trigger re-rank + read ranked cluster snapshot |
-| **Newsletter** | `/api/v1/newsletter` | `POST /b2c` `GET /preview` `POST /send` | Generate, preview (on-the-fly or stored), and dispatch via MailerSend |
+| **Newsletter** | `/api/v1/newsletter` | `POST /b2c` `GET /preview` `POST /send` | Generate, preview (on-the-fly or stored), and dispatch via Gmail SMTP |
 | **B2B** | `/api/v1/b2b` | `POST /report` `GET /keyword-velocity` | Strategic Brief generation (rate-limited 10/min) + SpaCy NER velocity |
 | **Admin** | `/api/v1/admin` | `POST /users` `GET /users` `PUT /personas/{id}` `POST /companies` `GET /companies` `PUT /companies/{id}` `GET /newsletters/all` `POST /newsletters/send-all` `GET /briefs/all` `POST /ingestion/trigger` | Full CRUD for users/companies, cross-tenant archives, batch email dispatch |
 | **Metrics** | `/api/v1/metrics` | `GET /summary` | JSON Prometheus snapshot polled by the admin dashboard |
@@ -615,7 +621,7 @@ The backend mounts a **FastMCP server** at `/api/v1/mcp` (SSE transport) so Clau
 1. **Onboarding** (`/user/onboarding`) — upload one or more PDFs (LinkedIn export, resume). An LLM extracts a structured persona with a 10-category weight vector and one of six archetypes.
 2. **Persona Inspector** (`/user/persona`) — see explicit weights captured at onboarding alongside behavioral weights that drift from feedback. Toggle "Update Interests" to edit bio + category picks in place.
 3. **My Feed** (`/user`) — personalized article feed driven by `SearchService.get_personalized_recommendations`. Each row has like / dislike / skip buttons; the signal flows through `/personas/feedback` and updates the persona in-place. First paint renders a pulsing skeleton, not the empty-state copy.
-4. **Newsletter** (`/newsletter`) — renders the actual email HTML in a sandboxed iframe. For today's edition the HTML is generated on-the-fly from fresh Qdrant data; past dates serve the stored copy. A date picker flips between today's preview and the archive of past editions. One explicit **Send to My Inbox** button dispatches via MailerSend; it's idempotent per `(user_id, edition_date)` and disables once `sent_at` is stamped. No auto-email — delivery is always a manual user or admin action.
+4. **Newsletter** (`/newsletter`) — renders the actual email HTML in a sandboxed iframe. For today's edition the HTML is generated on-the-fly from fresh Qdrant data; past dates serve the stored copy. A date picker flips between today's preview and the archive of past editions. One explicit **Send to My Inbox** button dispatches via Gmail SMTP; it's idempotent per `(user_id, edition_date)` and disables once `sent_at` is stamped. No auto-email — delivery is always a manual user or admin action.
 5. **Newsletter Archive** (`/user/newsletters`) — paginated list of all past editions with per-edition send status.
 
 ### B2B (Corporate Tenants)
@@ -628,7 +634,7 @@ The backend mounts a **FastMCP server** at `/api/v1/mcp` (SSE transport) so Clau
 
 1. **Admin Console** (`/admin`) — system health, high-velocity clusters, user/company totals, live Prometheus metrics, and the Admin Management panel (create user, create company, trigger pipeline).
 2. **Global Trends** (`/admin/trends`) — full ranked cluster table with data-reliability ratio.
-3. **Distribution Archive** (`/admin/newsletters`) — cross-tenant newsletter archive with date filter (defaults to yesterday); supports batch **Send All** dispatch (concurrency capped at 5 to respect MailerSend quota).
+3. **Distribution Archive** (`/admin/newsletters`) — cross-tenant newsletter archive with date filter (defaults to yesterday); supports batch **Send All** dispatch (concurrency capped at 5 to keep Gmail SMTP comfortably under its daily cap).
 4. **Editorial Review** (`/admin/newsletters/review`) — HITL approval UI for drafts.
 5. **User Directory** (`/admin/users`) — list, create, and edit all B2C users; updates persona fields and category weights in-place.
 6. **Company Directory** (`/admin/companies`) — list, create, and edit all B2B tenant profiles; saving triggers affinity re-extraction automatically.
@@ -743,6 +749,9 @@ The deduplication service and search service need identical embeddings across th
 
 ### Why a thin backend for pipelines, not inline execution
 The backend's pipeline endpoints used to run the full pipeline synchronously. Cloud Run's per-request timeout would kill ingestion mid-MERGE. Moving to Airflow gave retries, idempotency, observability, and a real audit trail — the backend call is now a 100 ms trigger that returns a `dag_run_id`.
+
+### Why Gmail SMTP instead of MailerSend
+We started on MailerSend's trial plan and hit a hard recipient allow-list ("MS42225: trial account unique recipients limit") the first time a real user outside the verified sender tried to receive a newsletter. Moving to paid MailerSend would solve it but adds a recurring bill for what is ultimately `smtp.gmail.com:587` wrapped in a SaaS. Gmail SMTP with an App Password has no allow-list, a 500 / 2000 msg-per-day cap (plenty for the demo and early production), proper DKIM/SPF/DMARC on the sending domain (better inbox placement than MailerSend's trial shared IPs), and zero marginal cost. The B2C signup path is Gmail-only as a soft constraint because consumer Gmail → corporate Outlook delivery still gets filtered without a paid domain reputation service; we prefer to bound the problem rather than paper over it. See [`backend/app/services/mailer.py`](backend/app/services/mailer.py) for the STARTTLS send path and [`Prototyping/gmail_smtp/`](Prototyping/gmail_smtp/) for the pre-migration throughput tests.
 
 ---
 

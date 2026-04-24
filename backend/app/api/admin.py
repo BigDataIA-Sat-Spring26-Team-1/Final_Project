@@ -99,7 +99,7 @@ async def list_users(
 
     cur.execute(
         """
-        SELECT id, email, full_name, created_at
+        SELECT id, email, full_name, role, created_at
         FROM users
         ORDER BY created_at DESC
         LIMIT %s OFFSET %s
@@ -112,11 +112,78 @@ async def list_users(
             "id": r[0],
             "email": r[1],
             "full_name": r[2],
-            "created_at": _iso(r[3]),
+            "role": r[3],
+            "created_at": _iso(r[4]),
         }
         for r in rows
     ]
     return {"total": total, "results": results}
+
+@router.get("/stats")
+async def admin_stats(
+    db: SnowflakeConnection = Depends(get_db_connection),
+) -> Dict[str, Any]:
+    """Aggregate counters for the admin dashboard — single round-trip so
+    the UI doesn't flash multiple spinners. Numbers come straight from
+    Snowflake, not a cached materialised view, because the dataset is
+    small enough (single-digit thousands) and drift is the bigger sin."""
+    cur = db.cursor()
+
+    def _one(sql: str, params: tuple = ()) -> int:
+        cur.execute(sql, params)
+        row = cur.fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+
+    return {
+        "users": {
+            "total": _one("SELECT COUNT(*) FROM users WHERE role = 'USER'"),
+            "admins": _one("SELECT COUNT(*) FROM users WHERE role = 'ADMIN'"),
+            "companies": _one("SELECT COUNT(*) FROM users WHERE role = 'COMPANY'"),
+        },
+        "companies": {
+            "total": _one("SELECT COUNT(*) FROM companies"),
+        },
+        "personas": {
+            "total": _one("SELECT COUNT(*) FROM user_personas"),
+        },
+        "newsletters": {
+            "generated": _one(
+                "SELECT COUNT(*) FROM newsletters "
+                "WHERE COALESCE(final_content, draft_content) IS NOT NULL"
+            ),
+            "sent": _one("SELECT COUNT(*) FROM newsletters WHERE sent_at IS NOT NULL"),
+            "today_generated": _one(
+                "SELECT COUNT(*) FROM newsletters "
+                "WHERE edition_date = CURRENT_DATE() "
+                "AND COALESCE(final_content, draft_content) IS NOT NULL"
+            ),
+        },
+        "briefs": {
+            "generated": _one(
+                "SELECT COUNT(*) FROM content_briefs WHERE brief_content IS NOT NULL"
+            ),
+            "today_generated": _one(
+                "SELECT COUNT(*) FROM content_briefs WHERE brief_date = CURRENT_DATE()"
+            ),
+        },
+        "articles": {
+            "total": _one("SELECT COUNT(*) FROM articles_raw"),
+            "last_24h": _one(
+                "SELECT COUNT(*) FROM articles_raw "
+                "WHERE published_at >= DATEADD(hour, -24, CURRENT_TIMESTAMP())"
+            ),
+            "clustered": _one(
+                "SELECT COUNT(*) FROM articles_raw WHERE cluster_id IS NOT NULL"
+            ),
+        },
+        "clusters": {
+            "total": _one("SELECT COUNT(*) FROM article_clusters"),
+            "ranked": _one(
+                "SELECT COUNT(*) FROM article_clusters WHERE final_trend_score IS NOT NULL"
+            ),
+        },
+    }
+
 
 @router.put("/personas/{user_id}")
 async def update_persona(

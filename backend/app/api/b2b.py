@@ -201,6 +201,60 @@ async def generate_b2b_report(
         urgency_tier=urgency_tier,
     )
 
+@router.get("/available-brief-dates")
+async def available_brief_dates(
+    company_id: str = Query(..., description="Tenant whose briefs to list."),
+    limit: int = Query(5, ge=1, le=30),
+    db: SnowflakeConnection = Depends(get_db_connection),
+) -> Dict[str, Any]:
+    """Distinct brief_dates with real content for a company, newest first.
+    Mirrors /api/v1/newsletter/available-dates for the B2B side so the UI
+    only offers dates that actually have a generated brief."""
+    limit = max(1, min(limit, 30))
+    cur = db.cursor()
+    cur.execute(
+        """
+        SELECT DISTINCT brief_date
+        FROM content_briefs
+        WHERE company_id = %s
+          AND brief_content IS NOT NULL
+          AND LENGTH(TRIM(brief_content)) > 0
+        ORDER BY brief_date DESC
+        LIMIT %s
+        """,
+        (company_id, limit),
+    )
+    dates = [_iso(r[0]) for r in cur.fetchall() if r and r[0] is not None]
+    return {"company_id": company_id, "dates": dates}
+
+
+@router.get("/available-velocity-dates")
+async def available_velocity_dates(
+    limit: int = Query(5, ge=1, le=30),
+    min_articles: int = Query(5, ge=1, le=500),
+    db: SnowflakeConnection = Depends(get_db_connection),
+) -> Dict[str, Any]:
+    """Distinct published_at dates with enough articles to produce a
+    meaningful keyword-velocity snapshot — avoids offering dates where
+    the NER pass would come back empty."""
+    limit = max(1, min(limit, 30))
+    cur = db.cursor()
+    cur.execute(
+        """
+        SELECT CAST(published_at AS DATE) AS d, COUNT(*) AS n
+        FROM articles_raw
+        WHERE published_at IS NOT NULL
+        GROUP BY 1
+        HAVING COUNT(*) >= %s
+        ORDER BY d DESC
+        LIMIT %s
+        """,
+        (min_articles, limit),
+    )
+    dates = [_iso(r[0]) for r in cur.fetchall() if r and r[0] is not None]
+    return {"dates": dates}
+
+
 @router.get("/keyword-velocity")
 async def keyword_velocity(
     date: Optional[str] = Query(

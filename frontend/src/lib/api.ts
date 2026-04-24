@@ -441,6 +441,7 @@ export interface UserListItem {
   id: string;
   email: string;
   full_name: string | null;
+  role?: 'ADMIN' | 'USER' | 'COMPANY';
   created_at: string;
 }
 
@@ -506,6 +507,69 @@ export interface NewsletterPreviewResponse {
   recipient?: string | null;
   common_count: number;
   personal_count: number;
+}
+
+export interface NewsletterAvailableDatesResponse {
+  user_id: string;
+  dates: string[];
+}
+
+export interface AdminStatsResponse {
+  users: { total: number; admins: number; companies: number };
+  companies: { total: number };
+  personas: { total: number };
+  newsletters: { generated: number; sent: number; today_generated: number };
+  briefs: { generated: number; today_generated: number };
+  articles: { total: number; last_24h: number; clustered: number };
+  clusters: { total: number; ranked: number };
+}
+
+export function getAdminStats(signal?: AbortSignal): Promise<AdminStatsResponse> {
+  return request<AdminStatsResponse>('/api/v1/admin/stats', { method: 'GET', signal });
+}
+
+export function getNewsletterAvailableDates(
+  userId: string,
+  limit = 5,
+  signal?: AbortSignal,
+): Promise<NewsletterAvailableDatesResponse> {
+  return request<NewsletterAvailableDatesResponse>('/api/v1/newsletter/available-dates', {
+    method: 'GET',
+    query: { user_id: userId, limit },
+    signal,
+  });
+}
+
+export interface AvailableBriefDatesResponse {
+  company_id: string;
+  dates: string[];
+}
+
+export function getAvailableBriefDates(
+  companyId: string,
+  limit = 5,
+  signal?: AbortSignal,
+): Promise<AvailableBriefDatesResponse> {
+  return request<AvailableBriefDatesResponse>('/api/v1/b2b/available-brief-dates', {
+    method: 'GET',
+    query: { company_id: companyId, limit },
+    signal,
+  });
+}
+
+export interface AvailableVelocityDatesResponse {
+  dates: string[];
+}
+
+export function getAvailableVelocityDates(
+  limit = 5,
+  signal?: AbortSignal,
+): Promise<AvailableVelocityDatesResponse> {
+  return request<AvailableVelocityDatesResponse>('/api/v1/b2b/available-velocity-dates', {
+    method: 'GET',
+    query: { limit },
+    signal,
+  });
 }
 
 export function previewNewsletterEmail(

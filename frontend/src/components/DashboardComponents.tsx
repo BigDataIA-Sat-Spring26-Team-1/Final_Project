@@ -251,10 +251,12 @@ export function FeedableArticleRow({
   article,
   userId,
   onFeedback,
+  showRelevancy = true,
 }: {
   article: RankedArticle;
   userId: string;
   onFeedback?: (type: FeedbackType, article: RankedArticle) => void;
+  showRelevancy?: boolean;
 }) {
   const [busy, setBusy] = useState<FeedbackType | null>(null);
   const [acknowledged, setAcknowledged] = useState<FeedbackType | null>(null);
@@ -330,15 +332,17 @@ export function FeedableArticleRow({
             <p className="text-xs text-muted-foreground line-clamp-2">{article.summary}</p>
           )}
         </div>
-        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/5 border border-white/5 shrink-0">
-          <div
-            className={cn(
-              'w-1.5 h-1.5 rounded-full',
-              relevancy > 90 ? 'bg-emerald-500' : relevancy > 70 ? 'bg-amber-500' : 'bg-zinc-500',
-            )}
-          />
-          <span className="text-xs font-bold">{relevancy}%</span>
-        </div>
+        {showRelevancy && (
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/5 border border-white/5 shrink-0">
+            <div
+              className={cn(
+                'w-1.5 h-1.5 rounded-full',
+                relevancy > 90 ? 'bg-emerald-500' : relevancy > 70 ? 'bg-amber-500' : 'bg-zinc-500',
+              )}
+            />
+            <span className="text-xs font-bold">{relevancy}%</span>
+          </div>
+        )}
       </div>
 
       <div className="flex items-center justify-between">

@@ -89,7 +89,17 @@ export default function UserPersonaPage() {
       setBioDraft('');
       return;
     }
-    setSelectedCategories(new Set(Object.keys(persona.explicit_category_weights || {})));
+    // Only count categories with a real weight as "selected" — the LinkedIn
+// extractor always emits all 10 taxonomy keys (zeros for unchosen ones),
+// and surfacing a zero-weight category as an active chip would misrepresent
+// the persona.
+setSelectedCategories(
+  new Set(
+    Object.entries(persona.explicit_category_weights || {})
+      .filter(([, weight]) => (weight ?? 0) > 0)
+      .map(([cat]) => cat),
+  ),
+);
     setBioDraft(persona.bio_summary || '');
   }, [persona]);
 
@@ -120,7 +130,17 @@ export default function UserPersonaPage() {
 
   const handleCancel = () => {
     if (persona) {
-      setSelectedCategories(new Set(Object.keys(persona.explicit_category_weights || {})));
+      // Only count categories with a real weight as "selected" — the LinkedIn
+// extractor always emits all 10 taxonomy keys (zeros for unchosen ones),
+// and surfacing a zero-weight category as an active chip would misrepresent
+// the persona.
+setSelectedCategories(
+  new Set(
+    Object.entries(persona.explicit_category_weights || {})
+      .filter(([, weight]) => (weight ?? 0) > 0)
+      .map(([cat]) => cat),
+  ),
+);
       setBioDraft(persona.bio_summary || '');
     }
     setEditing(false);

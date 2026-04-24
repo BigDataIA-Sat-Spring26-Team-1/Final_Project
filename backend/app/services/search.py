@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import date as _date
 from typing import List, Dict, Any, Optional
 from app.core.logging_conf import get_logger
@@ -8,12 +9,41 @@ from snowflake.connector import SnowflakeConnection
 
 logger = get_logger("app.services.search")
 
+_ARXIV_TITLE_VERSION_RE = re.compile(r"\s*\(v\d+\)\s*$", re.IGNORECASE)
+_TITLE_PUNCT_RE = re.compile(r"[^\w\s]")
+
+
+def _normalize_title(title: str) -> str:
+    if not title:
+        return ""
+    t = _ARXIV_TITLE_VERSION_RE.sub("", title).lower().strip()
+    t = _TITLE_PUNCT_RE.sub("", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _dedup_by_title(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Keep first occurrence of each normalized title. Upstream URL/semantic
+    dedup misses same-title-different-cluster-id rows produced by legacy
+    ingestion before the arXiv version-stripping went in."""
+    seen: set = set()
+    deduped: List[Dict[str, Any]] = []
+    for r in results:
+        key = _normalize_title(r.get("title", ""))
+        if not key:
+            deduped.append(r)
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(r)
+    return deduped
+
 def _filter_by_edition_date(
     results: List[Dict[str, Any]],
     edition_date: Optional[str],
     limit: int,
     db: Optional[SnowflakeConnection] = None,
-    window_days: int = 1,
+    window_days: int = 3,
 ) -> List[Dict[str, Any]]:
     if not edition_date or db is None:
         return results[:limit]
@@ -143,7 +173,11 @@ class SearchService:
         query_embeddings = await DeduplicationService.get_embeddings([search_query])
         query_vector = query_embeddings[0].tolist()
 
-        qdrant_limit = max(limit * 5, limit) if edition_date else limit
+        # Always oversample — title-dedup + date-filter both drop candidates,
+        # and without headroom the caller ends up with fewer articles than
+        # requested. 5× keeps the cost trivial while leaving room to return
+        # `limit` *distinct* articles after filtering.
+        qdrant_limit = max(limit * 5, limit)
         q_client = get_qdrant_client()
         response = q_client.query_points(
             collection_name="articles",
@@ -195,35 +229,49 @@ class SearchService:
             except Exception as e:
                 logger.warning("Recommendation url enrichment failed", error=str(e))
 
-        # Category enrichment — Qdrant payloads only gained `category_weights`
-        # in the 2026-04-24 write path, so points upserted earlier come back
-        # with empty `categories`. Hydrate from article_clusters so the
-        # like/dislike feedback loop multiplies against real weights.
+        # Category enrichment — hydrate `categories` for any result whose
+        # payload or fallback row didn't already carry them.
+        #
+        # The `cluster_id` key on a result is either an article_clusters.id
+        # (Qdrant-first path) OR an articles_raw.id (Snowflake-fallback
+        # path — legacy quirk in how the fallback was wired). One query
+        # joins both tables so either shape resolves back to the owning
+        # cluster's category_weights.
         needs_cats = [r for r in results if not (r.get("categories") or {})]
         if needs_cats and db is not None:
             try:
-                cids = [r["cluster_id"] for r in needs_cats]
+                ids = [r["cluster_id"] for r in needs_cats]
                 cur = db.cursor()
-                placeholders = ",".join(["%s"] * len(cids))
+                placeholders = ",".join(["%s"] * len(ids))
+                # Build a map keyed by BOTH article_clusters.id AND
+                # articles_raw.id → cluster.category_weights.
                 cur.execute(
-                    f"SELECT id, category_weights FROM article_clusters "
-                    f"WHERE id IN ({placeholders})",
-                    tuple(cids),
+                    f"""
+                    SELECT c.id, r.id, c.category_weights
+                    FROM article_clusters c
+                    LEFT JOIN articles_raw r ON r.cluster_id = c.id
+                    WHERE c.id IN ({placeholders})
+                       OR r.id IN ({placeholders})
+                    """,
+                    (*ids, *ids),
                 )
-                by_id_cats: dict = {}
-                for row in cur.fetchall():
-                    raw = row[1]
+                by_key: dict = {}
+                for ac_id, ar_id, raw in cur.fetchall():
+                    weights: dict = {}
                     if raw is None:
-                        continue
-                    if isinstance(raw, dict):
-                        by_id_cats[row[0]] = raw
-                    else:
+                        weights = {}
+                    elif isinstance(raw, dict):
+                        weights = raw
+                    elif isinstance(raw, str) and raw.strip():
                         try:
-                            by_id_cats[row[0]] = json.loads(raw) if isinstance(raw, str) else {}
+                            weights = json.loads(raw)
                         except json.JSONDecodeError:
-                            by_id_cats[row[0]] = {}
+                            weights = {}
+                    if weights:
+                        if ac_id: by_key[ac_id] = weights
+                        if ar_id: by_key[ar_id] = weights
                 for r in needs_cats:
-                    cats = by_id_cats.get(r["cluster_id"])
+                    cats = by_key.get(r["cluster_id"])
                     if cats:
                         r["categories"] = cats
             except Exception as e:  # noqa: BLE001
@@ -341,6 +389,7 @@ class SearchService:
             except Exception as e: 
                 logger.warning("Snowflake fallback recommendations failed", error=str(e))
 
+        results = _dedup_by_title(results)
         results = _filter_by_edition_date(results, edition_date, limit, db=db)
 
         return {

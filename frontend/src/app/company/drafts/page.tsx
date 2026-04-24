@@ -16,6 +16,7 @@ import { Spinner } from '@/components/Spinner';
 import { StrategicBriefCard } from '@/components/StrategicBriefCard';
 import {
   generateB2BReport,
+  getAvailableBriefDates,
   getBriefArchive,
   type BriefArchiveItem,
 } from '@/lib/api';
@@ -40,10 +41,22 @@ export default function CompanyDraftsPage() {
     setArchiveLoading(true);
     setError(null);
     try {
+      // Use /available-brief-dates as the source of truth for which
+      // dates to surface — mirrors the B2C newsletter page and filters
+      // out rows without real brief_content. Cap to last 5 so long-
+      // tenured tenants don't get an unbounded scroll. We then hydrate
+      // the actual content for those exact dates from /briefs/archive.
+      const avail = await getAvailableBriefDates(id, 5, signal);
+      if (avail.dates.length === 0) {
+        setBriefs([]);
+        setSelectedBrief(null);
+        return;
+      }
       const res = await getBriefArchive(id, undefined, 50, signal);
-      setBriefs(res.results);
-      // Auto-select the newest brief so the reader lands on fresh content.
-      setSelectedBrief(res.results[0] ?? null);
+      const allowed = new Set(avail.dates);
+      const trimmed = res.results.filter((b) => allowed.has(b.brief_date));
+      setBriefs(trimmed);
+      setSelectedBrief(trimmed[0] ?? null);
     } catch (err) {
       if ((err as Error).name === 'AbortError') return;
       setError(err instanceof Error ? err.message : 'Failed to load briefs');

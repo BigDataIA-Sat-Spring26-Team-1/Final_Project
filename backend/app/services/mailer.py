@@ -1,8 +1,15 @@
 from __future__ import annotations
 import asyncio
 import html as html_lib
+import re
+import smtplib
+import ssl
 from datetime import date as _date
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from typing import Any, Dict, List, Optional
+from uuid import uuid4
+
 from snowflake.connector import SnowflakeConnection
 from app.core.config import get_settings
 from app.core.logging_conf import get_logger
@@ -80,6 +87,10 @@ def _load_common_highlights(
             }
             for r in rows
         ]
+    # Fallback — no clusters were ingested on the exact edition_date. Still
+    # cap to clusters created on or before that date so historical editions
+    # never surface future-dated content (the 04-22 hero showing 04-24
+    # "Mounting tar" bug).
     cur.execute(
         """
         SELECT c.id, c.primary_title, c.primary_summary, c.trend_status,
@@ -95,10 +106,11 @@ def _load_common_highlights(
             WHERE cluster_id IS NOT NULL AND url IS NOT NULL AND url <> ''
         ) a ON a.cluster_id = c.id AND a.rn = 1
         WHERE c.final_trend_score IS NOT NULL
+          AND CAST(c.created_at AS DATE) <= %s
         ORDER BY c.created_at DESC, c.final_trend_score DESC NULLS LAST
         LIMIT %s
         """,
-        (limit,),
+        (edition_date, limit),
     )
     return [
         {
@@ -331,15 +343,139 @@ async def render_personalized_html(
 def _resolve_recipient(
     user: Dict[str, Any], test_recipient: str
 ) -> Optional[Dict[str, str]]:
+    """Pick where the newsletter actually gets mailed to.
+
+    The real signed-in user's email always wins. `MAILERSEND_TEST_RECIPIENT`
+    is only a fallback for seed accounts that have no email on file (e.g.
+    early demo users). Previously it overrode every recipient, which
+    caused Arjun's "Send to My Inbox" to deliver to the ops test
+    address instead of his own.
+    """
+    email = (user.get("email") or "").strip()
+    if email:
+        return {"email": email, "name": user.get("full_name") or email}
     if test_recipient:
         return {
             "email": test_recipient,
-            "name": user.get("full_name") or user.get("email") or "Test Reader",
+            "name": user.get("full_name") or "Test Reader",
         }
-    email = user.get("email")
-    if not email:
+    return None
+
+def _load_stored_html(
+    db: SnowflakeConnection, user_id: str, edition_date: str
+) -> Optional[str]:
+    cur = db.cursor()
+    cur.execute(
+        """
+        SELECT final_content, draft_content
+        FROM newsletters
+        WHERE user_id = %s AND edition_date = %s
+        ORDER BY generated_at DESC NULLS LAST, created_at DESC
+        LIMIT 1
+        """,
+        (user_id, edition_date),
+    )
+    row = cur.fetchone()
+    if not row:
         return None
-    return {"email": email, "name": user.get("full_name") or email}
+    html = (row[0] or row[1] or "").strip()
+    return html or None
+
+
+def _persist_rendered_html(
+    db: SnowflakeConnection, user_id: str, edition_date: str, html: str
+) -> None:
+    """Idempotent upsert of the templated HTML, keyed on (user_id,
+    edition_date). Used to lock today's newsletter after the first render
+    so multiple previews/logins see the same body."""
+    import uuid as _uuid
+    cur = db.cursor()
+    cur.execute(
+        """
+        MERGE INTO newsletters t
+        USING (SELECT %s AS user_id, %s AS edition_date) s
+        ON t.user_id = s.user_id AND t.edition_date = s.edition_date
+        WHEN MATCHED THEN UPDATE SET
+            final_content = %s,
+            draft_content = %s,
+            status = 'PUBLISHED',
+            generated_at = CURRENT_TIMESTAMP(),
+            updated_at = CURRENT_TIMESTAMP()
+        WHEN NOT MATCHED THEN INSERT
+            (id, user_id, edition_date, final_content, draft_content,
+             status, generated_at)
+        VALUES (%s, s.user_id, s.edition_date, %s, %s, 'PUBLISHED',
+                CURRENT_TIMESTAMP())
+        """,
+        (user_id, edition_date, html, html, str(_uuid.uuid4()), html, html),
+    )
+    db.commit()
+
+
+_PERSONAL_COUNT_RE = re.compile(r"Top\s+(\d+)\s+personalized picks", re.IGNORECASE)
+_COMMON_COUNT_RE = re.compile(r"Top\s+(\d+)\s+trending", re.IGNORECASE)
+
+
+def _counts_from_html(html: str) -> tuple[int, int]:
+    """Recover (personal_count, common_count) from a stored newsletter body.
+
+    The template always emits ``Top {N} personalized picks`` and
+    ``Top {N} trending across every feed`` so a simple regex recovers both.
+    Used when we serve a cached row — the counts weren't persisted as
+    separate columns, and showing 0/0 in the header while the body has
+    real content is misleading."""
+    personal = 0
+    common = 0
+    m = _PERSONAL_COUNT_RE.search(html or "")
+    if m:
+        try:
+            personal = int(m.group(1))
+        except ValueError:
+            pass
+    m = _COMMON_COUNT_RE.search(html or "")
+    if m:
+        try:
+            common = int(m.group(1))
+        except ValueError:
+            pass
+    return personal, common
+
+
+async def get_or_render_newsletter_html(
+    user_id: str, edition_date: str, db: SnowflakeConnection
+) -> Optional[Dict[str, Any]]:
+    """Serve the stored newsletter HTML if one exists for
+    (user_id, edition_date); otherwise render fresh via the templated
+    mailer path AND persist it so subsequent calls are stable.
+
+    Past editions without a stored row return None — we never retro-render
+    history since the underlying article pool has drifted.
+    """
+    stored = _load_stored_html(db, user_id, edition_date)
+    if stored:
+        user = _load_user_context(db, user_id)
+        personal, common = _counts_from_html(stored)
+        return {
+            "user": user,
+            "html": stored,
+            "text": stored,
+            "common_count": common,
+            "personal_count": personal,
+            "cached": True,
+        }
+
+    today = _date.today().isoformat()
+    if edition_date != today:
+        return None
+
+    rendered = await render_personalized_html(user_id, edition_date, db)
+    if not rendered or not (rendered.get("html") or "").strip():
+        return None
+
+    _persist_rendered_html(db, user_id, edition_date, rendered["html"])
+    rendered["cached"] = False
+    return rendered
+
 
 def _check_existing_delivery(
     db: SnowflakeConnection, user_id: str, edition_date: str
@@ -442,7 +578,7 @@ async def send_newsletter_email(
     existing = _check_existing_delivery(db, user_id, target_date)
     if existing:
         logger.info(
-            "Newsletter already delivered — skipping MailerSend call",
+            "Newsletter already delivered — skipping SMTP dispatch",
             user_id=user_id,
             edition_date=target_date,
         )
@@ -456,16 +592,18 @@ async def send_newsletter_email(
             "message_id": existing.get("message_id"),
         }
 
-    if not settings.mailersend_api_key:
+    if not settings.smtp_username or not settings.smtp_password:
         return {
             "status": "MAILER_DISABLED",
             "user_id": user_id,
             "edition_date": target_date,
             "already_sent": False,
-            "detail": "MAILERSEND_API_KEY not configured.",
+            "detail": "SMTP credentials not configured.",
         }
 
-    rendered = await render_personalized_html(user_id, target_date, db)
+    # Prefer the stored locked copy so the email matches exactly what the
+    # user saw in the preview. Only render fresh if there's no stored row.
+    rendered = await get_or_render_newsletter_html(user_id, target_date, db)
     if not rendered:
         return {
             "status": "USER_NOT_FOUND",
@@ -473,9 +611,18 @@ async def send_newsletter_email(
             "edition_date": target_date,
             "already_sent": False,
         }
-    user = rendered["user"]
+    user = rendered.get("user") or _load_user_context(db, user_id)
+    if not user:
+        return {
+            "status": "USER_NOT_FOUND",
+            "user_id": user_id,
+            "edition_date": target_date,
+            "already_sent": False,
+        }
+    if "text" not in rendered or not rendered.get("text"):
+        rendered["text"] = rendered["html"]
 
-    recipient = _resolve_recipient(user, settings.mailersend_test_recipient)
+    recipient = _resolve_recipient(user, settings.smtp_test_recipient)
     if not recipient:
         return {
             "status": "NO_RECIPIENT",
@@ -486,25 +633,38 @@ async def send_newsletter_email(
         }
 
     subject = f"CurateAI — Daily Briefing · {target_date}"
+    from_email = settings.smtp_from_email or settings.smtp_username
+    from_name = settings.smtp_from_name or "CurateAI Newsletter"
+    # Stable message-id so bounce/DSN paths can correlate; also surfaces
+    # as the `delivery_message_id` column so ops can trace a row.
+    message_id = f"<{uuid4().hex}@curateai.local>"
 
-    def _blocking_send() -> Dict[str, Any]:
-        from mailersend import MailerSendClient, EmailBuilder  
+    def _blocking_send() -> None:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = f"{from_name} <{from_email}>"
+        msg["To"] = recipient["email"]
+        msg["Message-ID"] = message_id
+        msg.attach(MIMEText(rendered["text"] or rendered["html"], "plain"))
+        msg.attach(MIMEText(rendered["html"], "html"))
 
-        client = MailerSendClient(api_key=settings.mailersend_api_key)
-        email = (
-            EmailBuilder()
-            .from_email(settings.mailersend_from_email, settings.mailersend_from_name)
-            .to_many([recipient])
-            .subject(subject)
-            .html(rendered["html"])
-            .text(rendered["text"])
-            .build()
-        )
-        return client.emails.send(email)
+        # macOS system Python can lack a CA bundle wired into stdlib ssl;
+        # certifi is a transitive dep via requests so it's always present.
+        try:
+            import certifi
+            context = ssl.create_default_context(cafile=certifi.where())
+        except ModuleNotFoundError:
+            context = ssl.create_default_context()
+
+        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30) as s:
+            s.ehlo()
+            s.starttls(context=context)
+            s.ehlo()
+            s.login(settings.smtp_username, settings.smtp_password)
+            s.sendmail(from_email, [recipient["email"]], msg.as_string())
 
     try:
-        response = await asyncio.to_thread(_blocking_send)
-        message_id = getattr(response, "message_id", None) or getattr(response, "id", None)
+        await asyncio.to_thread(_blocking_send)
         sent_at = _record_delivery(
             db,
             user_id,
@@ -534,7 +694,7 @@ async def send_newsletter_email(
         }
     except Exception as exc:  
         logger.error(
-            "MailerSend dispatch failed",
+            "SMTP dispatch failed",
             user_id=user_id,
             edition_date=target_date,
             error=str(exc),

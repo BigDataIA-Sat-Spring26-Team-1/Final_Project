@@ -44,10 +44,17 @@ class Settings(BaseSettings):
     airflow_password: str = "admin"
     airflow_request_timeout_seconds: float = 10.0
 
-    mailersend_api_key: str = ""
-    mailersend_from_email: str = "info@trial-vywj2lpk65el7oqz.mlsender.net"
-    mailersend_from_name: str = "CurateAI Newsletter"
-    mailersend_test_recipient: str = ""
+    # Gmail SMTP — replaces MailerSend. Uses STARTTLS on 587 with an App
+    # Password generated for a Google account (personal @gmail.com or
+    # Workspace @yourdomain.com). No recipient allow-list, ~500 sends/day
+    # for consumer Gmail and 2000/day for Workspace.
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from_email: str = ""
+    smtp_from_name: str = "CurateAI Newsletter"
+    smtp_test_recipient: str = ""
 
     model_config = SettingsConfigDict(
         env_file=_REPO_ROOT_ENV,

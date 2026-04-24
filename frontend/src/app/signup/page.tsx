@@ -14,6 +14,12 @@ import { formatAuthError, homeForRole, useAuth } from '@/components/AuthProvider
 import { Loader2, UserPlus } from 'lucide-react';
 
 const EMAIL_RE = /^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$/;
+// Reader (USER) signup is restricted to Gmail addresses because the
+// newsletter delivery path uses Gmail SMTP and consumer inboxes on other
+// providers (Outlook / Workspace) silently filter mail from our sender.
+// Company signup is unrestricted — company admins don't receive
+// newsletters, so the delivery constraint doesn't apply.
+const GMAIL_RE = /^[a-z0-9._%+\-]+@gmail\.com$/i;
 
 function SignupBody() {
   const { signup } = useAuth();
@@ -40,6 +46,9 @@ function SignupBody() {
   const validate = (): string | null => {
     if (fullName.trim().length < 1) return 'Full name is required.';
     if (!EMAIL_RE.test(email)) return 'Enter a valid email address.';
+    if (role === 'USER' && !GMAIL_RE.test(email.trim())) {
+      return 'Reader accounts must use a Gmail address (@gmail.com).';
+    }
     if (password.length < 8) return 'Password must be at least 8 characters.';
     if (!/[A-Za-z]/.test(password) || !/\d/.test(password)) {
       return 'Password must include at least one letter and one digit.';
@@ -144,9 +153,14 @@ function SignupBody() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@company.com"
+                placeholder={role === 'USER' ? 'you@gmail.com' : 'you@company.com'}
                 className="input"
               />
+              {role === 'USER' && (
+                <p className="text-xs text-dim mt-1">
+                  Reader accounts require a Gmail address — our newsletter delivery is Gmail SMTP.
+                </p>
+              )}
             </Field>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Field label="Password">
