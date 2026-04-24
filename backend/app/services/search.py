@@ -195,35 +195,49 @@ class SearchService:
             except Exception as e:
                 logger.warning("Recommendation url enrichment failed", error=str(e))
 
-        # Category enrichment — Qdrant payloads only gained `category_weights`
-        # in the 2026-04-24 write path, so points upserted earlier come back
-        # with empty `categories`. Hydrate from article_clusters so the
-        # like/dislike feedback loop multiplies against real weights.
+        # Category enrichment — hydrate `categories` for any result whose
+        # payload or fallback row didn't already carry them.
+        #
+        # The `cluster_id` key on a result is either an article_clusters.id
+        # (Qdrant-first path) OR an articles_raw.id (Snowflake-fallback
+        # path — legacy quirk in how the fallback was wired). One query
+        # joins both tables so either shape resolves back to the owning
+        # cluster's category_weights.
         needs_cats = [r for r in results if not (r.get("categories") or {})]
         if needs_cats and db is not None:
             try:
-                cids = [r["cluster_id"] for r in needs_cats]
+                ids = [r["cluster_id"] for r in needs_cats]
                 cur = db.cursor()
-                placeholders = ",".join(["%s"] * len(cids))
+                placeholders = ",".join(["%s"] * len(ids))
+                # Build a map keyed by BOTH article_clusters.id AND
+                # articles_raw.id → cluster.category_weights.
                 cur.execute(
-                    f"SELECT id, category_weights FROM article_clusters "
-                    f"WHERE id IN ({placeholders})",
-                    tuple(cids),
+                    f"""
+                    SELECT c.id, r.id, c.category_weights
+                    FROM article_clusters c
+                    LEFT JOIN articles_raw r ON r.cluster_id = c.id
+                    WHERE c.id IN ({placeholders})
+                       OR r.id IN ({placeholders})
+                    """,
+                    (*ids, *ids),
                 )
-                by_id_cats: dict = {}
-                for row in cur.fetchall():
-                    raw = row[1]
+                by_key: dict = {}
+                for ac_id, ar_id, raw in cur.fetchall():
+                    weights: dict = {}
                     if raw is None:
-                        continue
-                    if isinstance(raw, dict):
-                        by_id_cats[row[0]] = raw
-                    else:
+                        weights = {}
+                    elif isinstance(raw, dict):
+                        weights = raw
+                    elif isinstance(raw, str) and raw.strip():
                         try:
-                            by_id_cats[row[0]] = json.loads(raw) if isinstance(raw, str) else {}
+                            weights = json.loads(raw)
                         except json.JSONDecodeError:
-                            by_id_cats[row[0]] = {}
+                            weights = {}
+                    if weights:
+                        if ac_id: by_key[ac_id] = weights
+                        if ar_id: by_key[ar_id] = weights
                 for r in needs_cats:
-                    cats = by_id_cats.get(r["cluster_id"])
+                    cats = by_key.get(r["cluster_id"])
                     if cats:
                         r["categories"] = cats
             except Exception as e:  # noqa: BLE001
