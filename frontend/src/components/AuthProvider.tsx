@@ -23,6 +23,7 @@ import {
   ApiError,
   clearAuthToken,
   getAuthToken,
+  getCompanyProfile,
   getCurrentUser,
   getPersona,
   loginAccount,
@@ -32,6 +33,33 @@ import {
   type AuthUser,
   type SignupPayload,
 } from '@/lib/api';
+
+// Fields a COMPANY tenant must fill in before the app lets them past the
+// profile page. Aligned with the backend's 10-field profile schema; any
+// NULL / empty value here forces the COMPANY user back to /company/profile.
+const REQUIRED_COMPANY_FIELDS = [
+  'name',
+  'domain',
+  'industry',
+  'description',
+  'company_size',
+  'target_audience',
+  'key_products',
+  'content_pillars',
+  'competitors',
+  'tone_of_voice',
+] as const;
+
+function isCompanyProfileComplete(profile: Record<string, unknown> | null): boolean {
+  if (!profile) return false;
+  return REQUIRED_COMPANY_FIELDS.every((key) => {
+    const v = profile[key];
+    if (v === null || v === undefined) return false;
+    if (typeof v === 'string') return v.trim().length > 0;
+    if (Array.isArray(v)) return v.length > 0;
+    return true;
+  });
+}
 
 export const PUBLIC_PATHS = new Set<string>(['/', '/login', '/signup']);
 
@@ -47,12 +75,16 @@ interface AuthContextValue {
    * is forced through `/user/onboarding` on every navigation.
    */
   hasPersona: boolean | null;
+  /** Mirror of `hasPersona` for COMPANY tenants: are all profile fields filled? */
+  hasCompanyProfile: boolean | null;
   login: (email: string, password: string) => Promise<AuthUser>;
   signup: (payload: SignupPayload) => Promise<AuthUser>;
   logout: () => void;
   refresh: () => Promise<void>;
   /** Called by the onboarding page after persona is successfully persisted. */
   markPersonaPresent: () => void;
+  /** Called by the profile page after the required fields are filled in. */
+  markCompanyProfileComplete: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -61,6 +93,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [status, setStatus] = useState<AuthStatus>('loading');
   const [hasPersona, setHasPersona] = useState<boolean | null>(null);
+  const [hasCompanyProfile, setHasCompanyProfile] = useState<boolean | null>(null);
   const router = useRouter();
   const pathname = usePathname();
 
@@ -148,13 +181,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!controller.signal.aborted) setHasPersona(true);
       } catch (err) {
         if ((err as Error).name === 'AbortError') return;
-        if (err instanceof ApiError && err.status === 404) {
-          setHasPersona(false);
-        } else {
-          // Treat transient errors as "unknown" so we don't trap the user
-          // on /user/onboarding if the persona API is momentarily down.
-          setHasPersona(null);
-        }
+        // Fail closed: any non-200 response — 404, 500, network blip —
+        // treats the user as not-yet-onboarded. We'd rather over-prompt
+        // onboarding than silently let a persona-less USER into the app.
+        setHasPersona(false);
+      }
+    })();
+    return () => controller.abort();
+  }, [status, user]);
+
+  // Same probe for COMPANY tenants — do they have a fully filled profile?
+  // Incomplete profiles get pinned to /company/profile. Fail-closed on
+  // errors so a transient outage can't let a half-onboarded tenant drift
+  // into the briefs/drafts surfaces.
+  useEffect(() => {
+    const controller = new AbortController();
+    (async () => {
+      if (status !== 'authenticated' || !user || user.role !== 'COMPANY') {
+        setHasCompanyProfile(null);
+        return;
+      }
+      try {
+        const profile = await getCompanyProfile(user.id, controller.signal);
+        if (controller.signal.aborted) return;
+        setHasCompanyProfile(
+          isCompanyProfileComplete(profile as unknown as Record<string, unknown>),
+        );
+      } catch (err) {
+        if ((err as Error).name === 'AbortError') return;
+        setHasCompanyProfile(false);
       }
     })();
     return () => controller.abort();
@@ -163,10 +218,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const markPersonaPresent = useCallback(() => {
     setHasPersona(true);
   }, []);
+  const markCompanyProfileComplete = useCallback(() => {
+    setHasCompanyProfile(true);
+  }, []);
 
   // Route guard:
   //   - anonymous → /login
   //   - authenticated USER without persona → /user/onboarding (forced)
+  //   - authenticated COMPANY without full profile → /company/profile (forced)
   //   - authenticated on /login or /signup → role home
   useEffect(() => {
     if (status === 'loading') return;
@@ -179,9 +238,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       router.replace(homeForRole(user?.role));
       return;
     }
-    // Persona gate for USER role. Keep the user pinned to /user/onboarding
-    // until their persona row exists — the rest of the app (feed,
-    // newsletter, persona editor) assumes a persona is present.
     if (
       status === 'authenticated'
       && user?.role === 'USER'
@@ -189,15 +245,74 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       && pathname !== '/user/onboarding'
     ) {
       router.replace('/user/onboarding');
+      return;
     }
-  }, [pathname, router, status, user?.role, hasPersona]);
+    if (
+      status === 'authenticated'
+      && user?.role === 'COMPANY'
+      && hasCompanyProfile === false
+      && pathname !== '/company/profile'
+    ) {
+      router.replace('/company/profile');
+    }
+  }, [pathname, router, status, user?.role, hasPersona, hasCompanyProfile]);
+
+  // Block-rendering gate — while the persona / profile probe is in flight,
+  // render a holding screen instead of the destination page. Without this
+  // the destination flashes for a frame before the redirect effect above
+  // fires, which is enough to leak the feed or drafts UI to a not-yet-
+  // onboarded tenant.
+  const isPublic = PUBLIC_PATHS.has(pathname);
+  const onOnboardingPath =
+    (user?.role === 'USER' && pathname === '/user/onboarding')
+    || (user?.role === 'COMPANY' && pathname === '/company/profile');
+  const waitingForUserGate =
+    status === 'authenticated' && user?.role === 'USER' && hasPersona === null;
+  const waitingForCompanyGate =
+    status === 'authenticated' && user?.role === 'COMPANY' && hasCompanyProfile === null;
+  const shouldBlock =
+    !isPublic && !onOnboardingPath && (status === 'loading' || waitingForUserGate || waitingForCompanyGate);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ status, user, hasPersona, login, signup, logout, refresh, markPersonaPresent }),
-    [status, user, hasPersona, login, signup, logout, refresh, markPersonaPresent],
+    () => ({
+      status,
+      user,
+      hasPersona,
+      hasCompanyProfile,
+      login,
+      signup,
+      logout,
+      refresh,
+      markPersonaPresent,
+      markCompanyProfileComplete,
+    }),
+    [
+      status,
+      user,
+      hasPersona,
+      hasCompanyProfile,
+      login,
+      signup,
+      logout,
+      refresh,
+      markPersonaPresent,
+      markCompanyProfileComplete,
+    ],
   );
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={value}>
+      {shouldBlock ? <AuthGateFallback /> : children}
+    </AuthContext.Provider>
+  );
+}
+
+function AuthGateFallback() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-400 text-sm">
+      Loading your workspace…
+    </div>
+  );
 }
 
 export function useAuth(): AuthContextValue {

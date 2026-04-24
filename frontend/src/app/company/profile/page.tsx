@@ -99,7 +99,7 @@ function validate(draft: Draft): string | null {
 }
 
 export default function CompanyProfilePage() {
-  const { user } = useAuth();
+  const { user, markCompanyProfileComplete } = useAuth();
   const companyId = user?.company_id ?? '';
 
   const [company, setCompany] = useState<CompanyDetail | null>(null);
@@ -189,6 +189,9 @@ export default function CompanyProfilePage() {
       setSuccess('Company profile saved.');
       setEditing(false);
       await loadCompany(companyId);
+      // Release the AuthProvider gate so the rest of the company surfaces
+      // (drafts, trends) become reachable without a full reload.
+      markCompanyProfileComplete();
     } catch (err) {
       setError(
         err instanceof ApiError

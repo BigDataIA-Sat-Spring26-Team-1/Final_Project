@@ -24,14 +24,19 @@ vi.mock('next/navigation', () => ({
 }));
 vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({
-    user: null,
+    // Seed an authed user so the onboarding page auto-fills user_id
+    // from the context — the input box was removed in favour of that
+    // auto-fill, and every request body now derives from this id.
+    user: { id: 'user-42', email: 'test@example.com', role: 'USER' },
     status: 'authenticated',
     hasPersona: null,
+    hasCompanyProfile: null,
     login: vi.fn(),
     signup: vi.fn(),
     logout: vi.fn(),
     refresh: vi.fn(),
     markPersonaPresent: vi.fn(),
+    markCompanyProfileComplete: vi.fn(),
   }),
 }));
 
@@ -43,18 +48,14 @@ describe('UserOnboarding page', () => {
   it('renders the page scaffolding even before any interaction', () => {
     render(<UserOnboarding />);
     expect(screen.getByRole('heading', { name: /define your intelligence persona/i })).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/e\.g\. user-demo-001/i)).toBeInTheDocument();
+    // user_id input is no longer rendered — the page derives the id
+    // from the auth context and the Run Extraction button gates the flow.
+    expect(screen.getByRole('button', { name: /run extraction/i })).toBeInTheDocument();
   });
 
-  it('prompts for a user id before uploading', async () => {
-    const user = userEvent.setup();
+  it('keeps extraction disabled until a file is picked', () => {
     render(<UserOnboarding />);
-    // Can't extract without picking files — button stays disabled.
     const runButton = screen.getByRole('button', { name: /run extraction/i });
-    expect(runButton).toBeDisabled();
-
-    await user.type(screen.getByPlaceholderText(/e\.g\. user-demo-001/i), 'user-42');
-    // Still disabled because no file was picked.
     expect(runButton).toBeDisabled();
   });
 
@@ -68,9 +69,6 @@ describe('UserOnboarding page', () => {
     );
     const user = userEvent.setup();
     render(<UserOnboarding />);
-
-    // Populate user_id
-    await user.type(screen.getByPlaceholderText(/e\.g\. user-demo-001/i), 'user-42');
 
     // The file input is visually-hidden with class sr-only; locate via role.
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
@@ -98,7 +96,6 @@ describe('UserOnboarding page', () => {
     const user = userEvent.setup();
     render(<UserOnboarding />);
 
-    await user.type(screen.getByPlaceholderText(/e\.g\. user-demo-001/i), 'user-42');
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
     await user.upload(fileInput, new File(['bytes'], 'r.pdf', { type: 'application/pdf' }));
     await user.click(screen.getByRole('button', { name: /run extraction/i }));
