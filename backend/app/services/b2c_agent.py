@@ -1,3 +1,4 @@
+import re
 from typing import Dict, Any
 from langgraph.graph import END
 from app.core.logging_conf import get_logger
@@ -13,6 +14,22 @@ from app.services.agent_base import (
 from app.services.search import SearchService
 
 logger = get_logger("app.services.b2c_agent")
+
+
+# The LLM occasionally returns HTML wrapped in a ```html ... ``` Markdown
+# code fence despite the prompt telling it not to. Strip it defensively so
+# the rendered newsletter never shows backticks to the end user.
+_HTML_FENCE_RE = re.compile(
+    r"^\s*```(?:html)?\s*\n?(.*?)\n?\s*```\s*$",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _strip_code_fence(text: str) -> str:
+    if not text:
+        return text
+    m = _HTML_FENCE_RE.match(text)
+    return m.group(1).strip() if m else text.strip()
 
 @track_node_latency
 async def initialize_state(state: AgentState) -> Dict[str, Any]:
@@ -90,16 +107,17 @@ async def generate_newsletter(state: AgentState) -> Dict[str, Any]:
     {article_summaries}
     
     Formatting Requirements:
-    - Return clean, semantic HTML format (no markdown formatting blocks).
+    - Return RAW HTML ONLY. Start your response with a tag like <!DOCTYPE html>
+      or <html>. Do NOT wrap the output in a ```html ... ``` code fence.
+      Do NOT return any Markdown. No backticks anywhere in the response.
     - Include a catchy <h1> headline.
     - Write a brief introductory paragraph connecting the news to their role.
     - Present the core news as scannable bullet points mapping back to the sources.
     """
-    
+
     logger.info("Generating newsletter via LLM with User Persona", job_title=job_title)
     response = await BaseAgentService.call_llm(messages=[{"role": "user", "content": prompt}])
-    
-    return {"generated_content": response, "status": "SUCCESS"}
+    return {"generated_content": _strip_code_fence(response), "status": "SUCCESS"}
 
 @track_node_latency
 async def editor_review(state: AgentState) -> Dict[str, Any]:
@@ -151,13 +169,14 @@ async def editor_revise(state: AgentState) -> Dict[str, Any]:
     Original Draft: 
     {draft}
     
-    Rewrite this draft entirely to fix the noted issues. Output only the final updated HTML, with no conversational filler.
+    Rewrite this draft entirely to fix the noted issues. Output only the final updated
+    HTML, with no conversational filler. Do NOT wrap the output in a ```html ... ```
+    code fence — return raw HTML starting with a tag.
     """
-    
+
     logger.info("Revising draft based on editor feedback")
     response = await BaseAgentService.call_llm(messages=[{"role": "user", "content": prompt}])
-    
-    return {"generated_content": response, "status": "REVISED"}
+    return {"generated_content": _strip_code_fence(response), "status": "REVISED"}
 
 def route_execution_mode(state: AgentState) -> str:
 

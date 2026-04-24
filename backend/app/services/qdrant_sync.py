@@ -21,7 +21,8 @@ def _fetch_clusters(db, limit: Optional[int] = None) -> List[Dict[str, Any]]:
                c.cluster_size,
                c.trend_status,
                a.url,
-               a.source_name
+               a.source_name,
+               c.category_weights
         FROM article_clusters c
         LEFT JOIN (
             SELECT cluster_id, url, source_name,
@@ -39,18 +40,35 @@ def _fetch_clusters(db, limit: Optional[int] = None) -> List[Dict[str, Any]]:
     if limit is not None:
         query += f" LIMIT {int(limit)}"
     cur.execute(query)
-    return [
-        {
-            "cluster_id": row[0],
-            "title": row[1] or "",
-            "summary": row[2] or "",
-            "cluster_size": int(row[3] or 1),
-            "trend_status": row[4],
-            "url": row[5] or "",
-            "source_name": row[6] or "",
-        }
-        for row in cur.fetchall()
-    ]
+    rows = cur.fetchall()
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        raw_weights = row[7]
+        weights: Dict[str, float] = {}
+        if raw_weights is not None:
+            if isinstance(raw_weights, dict):
+                weights = raw_weights
+            elif isinstance(raw_weights, str) and raw_weights.strip():
+                try:
+                    import json as _json
+                    parsed = _json.loads(raw_weights)
+                    if isinstance(parsed, dict):
+                        weights = parsed
+                except (ValueError, TypeError):
+                    weights = {}
+        out.append(
+            {
+                "cluster_id": row[0],
+                "title": row[1] or "",
+                "summary": row[2] or "",
+                "cluster_size": int(row[3] or 1),
+                "trend_status": row[4],
+                "url": row[5] or "",
+                "source_name": row[6] or "",
+                "category_weights": weights,
+            }
+        )
+    return out
 
 def _embed_text_for(cluster: Dict[str, Any]) -> str:
     title = (cluster.get("title") or "").strip()
@@ -105,6 +123,11 @@ async def resync_articles_collection(
                         "sources": [c["source_name"]] if c["source_name"] else [],
                         "cluster_size": c["cluster_size"],
                         "trend_status": c["trend_status"],
+                        # Category weights are read by SearchService and
+                        # handed to the frontend so like/dislike feedback
+                        # multiplies against real per-article weights
+                        # instead of against {}.
+                        "category_weights": c.get("category_weights") or {},
                     },
                 )
             )

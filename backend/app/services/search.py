@@ -153,14 +153,25 @@ class SearchService:
         
         results = []
         for hit in response.points:
+            # `categories` MUST be surfaced on every hit — the frontend
+            # feedback flow multiplies user-feedback deltas by the
+            # article's category weights. Missing categories → feedback
+            # is a no-op (see app/api/personas.record_article_feedback),
+            # which was the actual "likes aren't sticking" bug. Fall back
+            # through payload keys the dedup upserter + qdrant_sync DAG
+            # both write, then enrich from Snowflake below if still empty.
+            payload = hit.payload or {}
             results.append({
                 "cluster_id": str(hit.id),
                 "score": round(hit.score, 4),
-                "title": hit.payload.get("title", ""),
-                "url": hit.payload.get("url", ""),
-                "summary": hit.payload.get("summary", ""),
-                "sources": hit.payload.get("sources", []),
-                "cluster_size": hit.payload.get("cluster_size", 1)
+                "title": payload.get("title", ""),
+                "url": payload.get("url", ""),
+                "summary": payload.get("summary", ""),
+                "sources": payload.get("sources", []),
+                "source_name": payload.get("source_name") or "",
+                "cluster_size": payload.get("cluster_size", 1),
+                "trend_status": payload.get("trend_status"),
+                "categories": payload.get("category_weights") or payload.get("categories") or {},
             })
 
         needs_url = [r for r in results if not r.get("url")]
@@ -181,8 +192,42 @@ class SearchService:
                         r["url"] = enriched[0] or ""
                         if enriched[1] and enriched[1] not in r.get("sources", []):
                             r["sources"] = [enriched[1], *(r.get("sources") or [])]
-            except Exception as e:  
+            except Exception as e:
                 logger.warning("Recommendation url enrichment failed", error=str(e))
+
+        # Category enrichment — Qdrant payloads only gained `category_weights`
+        # in the 2026-04-24 write path, so points upserted earlier come back
+        # with empty `categories`. Hydrate from article_clusters so the
+        # like/dislike feedback loop multiplies against real weights.
+        needs_cats = [r for r in results if not (r.get("categories") or {})]
+        if needs_cats and db is not None:
+            try:
+                cids = [r["cluster_id"] for r in needs_cats]
+                cur = db.cursor()
+                placeholders = ",".join(["%s"] * len(cids))
+                cur.execute(
+                    f"SELECT id, category_weights FROM article_clusters "
+                    f"WHERE id IN ({placeholders})",
+                    tuple(cids),
+                )
+                by_id_cats: dict = {}
+                for row in cur.fetchall():
+                    raw = row[1]
+                    if raw is None:
+                        continue
+                    if isinstance(raw, dict):
+                        by_id_cats[row[0]] = raw
+                    else:
+                        try:
+                            by_id_cats[row[0]] = json.loads(raw) if isinstance(raw, str) else {}
+                        except json.JSONDecodeError:
+                            by_id_cats[row[0]] = {}
+                for r in needs_cats:
+                    cats = by_id_cats.get(r["cluster_id"])
+                    if cats:
+                        r["categories"] = cats
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Category enrichment failed", error=str(e))
 
         if db is not None and all(not r.get("url") for r in results):
             try:

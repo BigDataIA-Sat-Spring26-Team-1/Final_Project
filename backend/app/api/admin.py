@@ -318,7 +318,11 @@ async def update_company(
     company_id: str,
     payload: UpdateCompanyRequest,
     db: SnowflakeConnection = Depends(get_db_connection),
-) -> Dict[str, str]:
+) -> Dict[str, Any]:
+    # Returns {company_id, status, affinity_refreshed}. The bool field forces
+    # Dict[str, Any] — under Dict[str, str] FastAPI's response validator
+    # raised ResponseValidationError on every successful save, masquerading
+    # as a generic 500 in the browser.
     required = {
         "name": payload.name,
         "domain": payload.domain,

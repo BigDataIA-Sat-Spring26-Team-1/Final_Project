@@ -116,6 +116,12 @@ class DeduplicationService:
                         "summary": cluster[0].get('summary', ''),
                         "sources": cluster[0].get('_all_sources', []),
                         "cluster_size": len(cluster),
+                        # Forward the taxonomy weights so the frontend's
+                        # like/dislike signal multiplies against real per-
+                        # article weights instead of {}.
+                        "category_weights": cluster[0].get('internal_category_weights')
+                            or cluster[0].get('category_weights')
+                            or {},
                     },
                 )
                 for cluster in clusters
