@@ -7,7 +7,6 @@ from tenacity import (
     retry_if_exception_type,
     before_sleep_log
 )
-
 from app.core.config import get_settings
 from app.core.logging_conf import get_logger
 from app.core.metrics import LLM_REQUESTS_TOTAL, LLM_TOKENS_TOTAL, LLM_COST_TOTAL
@@ -19,7 +18,6 @@ logger = get_logger("app.services.llm_base")
 T = TypeVar("T", bound=BaseModel)
 
 class BaseLLMService:
-    """Provides a standardized gateway to LLM models with built-in retries and structured output."""
     
     @staticmethod
     @retry(
@@ -35,7 +33,6 @@ class BaseLLMService:
         model: str = None,
         temperature: float = 0.0,
     ) -> T:
-        """Calls the LLM and guarantees the result matches the provided Pydantic model format."""
         settings = get_settings()
         if not model:
             model = settings.default_llm_model
@@ -60,13 +57,11 @@ class BaseLLMService:
                 logger.warning("LLM response content is empty")
                 raise ValueError("LLM returned an empty response content.")
             
-            # Task 21: Record Metrics
             usage = getattr(response, 'usage', None)
             if usage:
                 LLM_TOKENS_TOTAL.labels(model=model, token_type="prompt").inc(usage.prompt_tokens)
                 LLM_TOKENS_TOTAL.labels(model=model, token_type="completion").inc(usage.completion_tokens)
                 
-                # Simple heuristic estimation ($0.15 / 1M for gpt-4o-mini)
                 cost = (usage.prompt_tokens * 0.00000015) + (usage.completion_tokens * 0.0000006)
                 LLM_COST_TOTAL.labels(model=model).inc(cost)
 
@@ -92,7 +87,6 @@ class BaseLLMService:
         model: str = None,
         temperature: float = 0.7
     ) -> str:
-        """Standard text completion for freeform logic that doesn't need strict Pydantic matching."""
         settings = get_settings()
         if not model:
             model = settings.default_llm_model

@@ -3,11 +3,9 @@ import numpy as np
 from urllib.parse import urlparse
 from typing import List, Dict, Any
 import asyncio
-
 from litellm import aembedding
 from sklearn.metrics.pairwise import cosine_similarity
 from qdrant_client.models import PointStruct
-
 from app.core.config import get_settings
 from app.core.logging_conf import get_logger
 from app.db.qdrant import get_qdrant_client
@@ -16,11 +14,6 @@ logger = get_logger("app.services.deduplication")
 settings = get_settings()
 
 class DeduplicationService:
-    """Dual-layer deduplication engine that groups overlapping news stories.
-    
-    Uses URL matching for exact duplicates and OpenAI structural embeddings 
-    for semantic overlap mapping. Also pushes points to Qdrant.
-    """
     
     @staticmethod
     def normalize_url(url: str) -> str:
@@ -40,15 +33,7 @@ class DeduplicationService:
 
     @classmethod
     async def get_embeddings(cls, texts: List[str]) -> np.ndarray:
-        """
-        Fetches asynchronous vector embeddings using LiteLLM standard.
-        Batches requests into chunks of 100 to prevent API timeouts.
-        
-        Args:
-            texts: A list of clean summary/title text blobs.
-        Returns:
-            A NumPy array of multi-dimensional vector embeddings.
-        """
+
         logger.info("Fetching OpenAI embeddings", model=settings.embedding_model, count=len(texts))
         
         embeddings = []
@@ -66,28 +51,12 @@ class DeduplicationService:
 
     @classmethod
     async def process_batch(cls, articles: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
-        """
-        Runs the semantic clustering pipeline on a batch of unclustered articles.
-        
-        Args:
-            articles: A list of raw article dictionaries fetched from the database.
-            
-        Returns:
-            A list of clusters, where each cluster is a list of article dictionaries
-            that share structural or semantic similarity.
-            
-        Process flow:
-        1. Collapse structurally identical articles (exact URL match).
-        2. Generate vector embeddings for the unique articles using OpenAI.
-        3. Form clusters using a Cosine Similarity distance metric threshold.
-        4. Ingest the newly calculated vectors into Qdrant for routing/search.
-        """
+
         if not articles:
             return []
 
         logger.info("Starting deduplication batch", count=len(articles))
 
-        # 1. URL Grouping (collapse exact duplicates)
         url_groups: Dict[str, List[Dict[str, Any]]] = {}
         for art in articles:
             norm_url = cls.normalize_url(art.get('url', ''))
@@ -105,11 +74,9 @@ class DeduplicationService:
         if len(url_uniques) <= 1:
             return [[u] for u in url_uniques]
 
-        # 2. Semantic Clustering
         clean_sentences = []
         for art in url_uniques:
             text = f"{art.get('title', '')} {art.get('summary', '')}".strip()
-            # Basic clean without removing meaning
             clean_text = re.sub(r'[^\w\s]', '', text.lower())
             clean_sentences.append(clean_text)
             
@@ -128,7 +95,6 @@ class DeduplicationService:
             current_cluster = []
             for idx in similar_indices:
                 if idx not in visited:
-                    # Keep the embedding with the article for Qdrant insertion later if needed
                     url_uniques[idx]['_embedding'] = embeddings[idx].tolist()
                     current_cluster.append(url_uniques[idx])
                     visited.add(idx)
@@ -138,22 +104,14 @@ class DeduplicationService:
 
         logger.info("Semantic clustering formed", cluster_count=len(clusters))
         
-        # 3. Index cluster representatives into Qdrant for routing/search.
-        # Batched because Qdrant Cloud caps single-request payloads at 32 MB —
-        # 1536-dim float vectors are ~6 KB each, so 500 points ≈ 3 MB payload
-        # which stays well under the limit even with generous JSON overhead.
         try:
             client = get_qdrant_client()
             points = [
                 PointStruct(
-                    # The representative raw article's id doubles as the vector id.
                     id=str(cluster[0]['id']),
                     vector=cluster[0]['_embedding'],
                     payload={
                         "title": cluster[0].get('title', ''),
-                        # Source URL of the representative so the frontend
-                        # can deep-link from a recommendation card straight
-                        # to the original publisher's page.
                         "url": cluster[0].get('url', ''),
                         "summary": cluster[0].get('summary', ''),
                         "sources": cluster[0].get('_all_sources', []),
@@ -177,17 +135,6 @@ class DeduplicationService:
 
     @classmethod
     def synthesize_story(cls, cluster: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Creates a single cohesive story object that represents a group of identically 
-        themed articles.
-        
-        Args:
-            cluster: A list of matched articles forming a singular news event.
-            
-        Returns:
-            A consolidated object representing the cluster, complete with aggregated IDs,
-            source overlap tags, and the primary content extracted from the representative.
-        """
         representative = cluster[0]
         
         all_ids = []

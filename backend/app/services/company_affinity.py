@@ -1,29 +1,10 @@
-"""Company content-affinity extractor.
-
-Mirrors the user-persona CategoryWeights taxonomy. Given a company
-profile we ask the LLM to distribute 1.0 of probability mass over the
-ten production categories, emphasising those named in content_pillars /
-key_products / target_audience.
-
-The resulting 10-dim vector is persisted in ``companies.content_affinity_weights``
-and consumed by the B2B agent's Strategic Brief prompt as a hard
-constraint — dominant categories drive headline / keyword vocabulary;
-zero-weight categories are forbidden from appearing.
-
-Validated under ``Prototyping/SEO_Personalized/prototype.py`` — cross-tenant
-brief-text cosine dropped from 0.60 → 0.52 (~8 pts) when the affinity
-vector was injected as a prompt constraint at temperature=0.4.
-"""
 from __future__ import annotations
-
 from typing import Any, Dict, Optional
-
 from app.core.logging_conf import get_logger
 from app.core.schemas import CompanyContentAffinity
 from app.services.llm_base import BaseLLMService
 
 logger = get_logger("app.services.company_affinity")
-
 
 EXTRACTOR_SYSTEM = """\
 You are the CurateAI company-affinity extractor. You read a corporate
@@ -52,7 +33,6 @@ Taxonomy:
 - startups: Startup strategy, fundraising, product-market fit, fintech, finance
 """
 
-
 def _profile_block(company: Dict[str, Any]) -> str:
     keep_fields = (
         "name", "industry", "description", "target_audience",
@@ -64,14 +44,10 @@ def _profile_block(company: Dict[str, Any]) -> str:
         if company.get(k)
     )
 
-
 async def extract_company_affinity(
     company: Dict[str, Any],
 ) -> Optional[Dict[str, float]]:
-    """One structured LLM call → 10-dim category weight vector.
 
-    Returns ``None`` on extraction failure (don't block the profile save).
-    """
     profile_text = _profile_block(company)
     if not profile_text.strip():
         logger.warning("Affinity skipped — empty company profile")
@@ -87,7 +63,7 @@ async def extract_company_affinity(
             model="gpt-4o-mini",
             temperature=0.0,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  
         logger.error(
             "Affinity extraction failed — proceeding without weights",
             company_name=company.get("name"),
@@ -97,9 +73,7 @@ async def extract_company_affinity(
 
     weights = result.model_dump()
     total = sum(weights.values()) or 1.0
-    # Renormalise so downstream consumers can rely on sum≈1.0 even when
-    # the LLM drifts (it occasionally returns 0.9 or 1.1 despite the
-    # "must sum to 1.0" instruction).
+
     normalised = {k: round(v / total, 4) for k, v in weights.items()}
     logger.info(
         "Affinity extracted",

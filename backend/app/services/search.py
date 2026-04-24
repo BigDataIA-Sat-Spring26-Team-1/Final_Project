@@ -8,7 +8,6 @@ from snowflake.connector import SnowflakeConnection
 
 logger = get_logger("app.services.search")
 
-
 def _filter_by_edition_date(
     results: List[Dict[str, Any]],
     edition_date: Optional[str],
@@ -16,17 +15,6 @@ def _filter_by_edition_date(
     db: Optional[SnowflakeConnection] = None,
     window_days: int = 1,
 ) -> List[Dict[str, Any]]:
-    """Strict temporal scoping against ``articles_raw.published_at``.
-
-    Returns only candidates whose cluster has at least one article published
-    between ``edition_date - window_days`` and ``edition_date`` (inclusive).
-    This produces genuinely different content per edition date when the
-    ingestion DAG has been running daily — and honestly returns an empty
-    list for dates with no ingestion coverage.
-
-    When ``edition_date`` is None or ``db`` is unavailable we return the top
-    ``limit`` unfiltered (the "today, no-scoping" path).
-    """
     if not edition_date or db is None:
         return results[:limit]
     try:
@@ -37,10 +25,6 @@ def _filter_by_edition_date(
     if not cluster_ids:
         return results[:limit]
 
-    # SearchService returns ids under the ``cluster_id`` key, but in the
-    # Snowflake fallback path the value is actually ``articles_raw.id`` (legacy
-    # quirk). Match against BOTH columns so filtering works regardless of
-    # which path produced the candidate.
     placeholders = ",".join(["%s"] * len(cluster_ids))
     cur = db.cursor()
     try:
@@ -61,7 +45,7 @@ def _filter_by_edition_date(
                 fresh_ids.add(aid)
             if cid:
                 fresh_ids.add(cid)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc: 
         logger.warning(
             "Edition-date filter query failed; returning unscoped top-N",
             edition_date=edition_date,
@@ -72,7 +56,6 @@ def _filter_by_edition_date(
     scoped = [r for r in results if r.get("cluster_id") in fresh_ids]
     return scoped[:limit]
 
-
 class SearchService:
     @staticmethod
     async def get_personalized_recommendations(
@@ -81,16 +64,7 @@ class SearchService:
         db: SnowflakeConnection,
         edition_date: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """
-        Logic for retrieving personalized content for a user.
-        Shared by the API and the Agents.
-        """
-        # 1. Fetch the full persona row (weights + free-text fields) so the
-        # Qdrant query embedding reflects the user's actual role and interests,
-        # not just sparse category tokens. When the id doesn't match a persona
-        # (B2B callers pass a company_id) we fall through to the company
-        # profile — now pulling every richly-populated field so the agent's
-        # retrieval materially differs between tenants.
+
         cur = db.cursor()
         cur.execute(
             """
@@ -121,13 +95,10 @@ class SearchService:
                     behavioral_w = json.loads(behavioral_weights)
                 except (json.JSONDecodeError, TypeError):
                     pass
-            for field in row[2:6]:  # job_title, seniority, archetype, bio
+            for field in row[2:6]:  
                 if field and isinstance(field, str) and field.strip():
                     persona_text_parts.append(field.strip())
         else:
-            # This id is a company. Build the query from every
-            # strategic-brief-relevant field so two companies with different
-            # positioning get genuinely different retrieval.
             cur.execute(
                 """
                 SELECT name, industry, description, target_audience,
@@ -148,8 +119,6 @@ class SearchService:
                 query=company_query[:180],
             )
 
-        # P4 blend: refined = explicit × 0.8 + behavioral × 0.2
-        # Categories below 0.05 are pruned as noise.
         all_categories = set(explicit_w.keys()) | set(behavioral_w.keys())
         weights = {
             cat: round(explicit_w.get(cat, 0.0) * 0.8 + behavioral_w.get(cat, 0.0) * 0.2, 4)
@@ -163,9 +132,7 @@ class SearchService:
             top_cats = [
                 cat for cat, _ in sorted(weights.items(), key=lambda x: x[1], reverse=True)
             ]
-            # Category tokens are coarse on their own; prepend the user's
-            # free-text persona blurb (job title, seniority, archetype, bio)
-            # so the embedding captures role-specific language.
+
             parts: list[str] = []
             parts.extend(persona_text_parts)
             parts.extend(top_cats)
@@ -173,13 +140,9 @@ class SearchService:
 
         logger.info("Formulated semantic persona query", user_id=user_id, query=search_query[:180])
 
-        # 2. Vectorize query
         query_embeddings = await DeduplicationService.get_embeddings([search_query])
         query_vector = query_embeddings[0].tolist()
 
-        # 3. Query Qdrant. When an ``edition_date`` is supplied we pull a wider
-        # candidate pool so the date-scoped partition below still yields a
-        # representative slice after stratification.
         qdrant_limit = max(limit * 5, limit) if edition_date else limit
         q_client = get_qdrant_client()
         response = q_client.query_points(
@@ -200,8 +163,6 @@ class SearchService:
                 "cluster_size": hit.payload.get("cluster_size", 1)
             })
 
-        # URL enrichment. Qdrant payloads historically stored the representative
-        # article's id — look those up in articles_raw first.
         needs_url = [r for r in results if not r.get("url")]
         if needs_url and db is not None:
             try:
@@ -220,16 +181,9 @@ class SearchService:
                         r["url"] = enriched[0] or ""
                         if enriched[1] and enriched[1] not in r.get("sources", []):
                             r["sources"] = [enriched[1], *(r.get("sources") or [])]
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:  
                 logger.warning("Recommendation url enrichment failed", error=str(e))
 
-        # If Qdrant's vectors are stale (a common state during demos — the
-        # collection was seeded from an older ingestion), the id-based lookup
-        # above returns nothing. In that case fall back to a Snowflake-native
-        # candidate pool and re-score against the user/company semantic query
-        # so the returned articles still reflect the caller's profile rather
-        # than a global trend ranking (which would be identical for every
-        # tenant).
         if db is not None and all(not r.get("url") for r in results):
             try:
                 cur = db.cursor()
@@ -263,8 +217,6 @@ class SearchService:
                 )
                 rows = cur.fetchall()
 
-                # Rank by overlap with user's weights when available; otherwise
-                # keep the raw trend ordering.
                 weights_lc = {k.lower(): v for k, v in (weights or {}).items()}
 
                 def overlap_score(cat_weights_variant) -> float:
@@ -308,11 +260,7 @@ class SearchService:
 
                 enriched_results.sort(key=lambda r: r["score"], reverse=True)
                 if enriched_results:
-                    # Re-score the candidate pool by semantic similarity to
-                    # ``search_query`` so the fallback doesn't degrade to a
-                    # global trend list (which would be identical for every
-                    # tenant). One embedding call per article is expensive;
-                    # bound it to the top 60 candidates.
+
                     try:
                         import numpy as np
 
@@ -329,8 +277,7 @@ class SearchService:
                             v = np.asarray(vec, dtype=float)
                             v_norm = v / (np.linalg.norm(v) or 1.0)
                             cos = float(np.dot(q_norm, v_norm))
-                            # Blend cosine (dominant) with the trend-score so
-                            # highly relevant breaking stories still float up.
+
                             r["score"] = round(0.7 * cos + 0.3 * r["score"], 4)
                         top_pool.sort(key=lambda r: r["score"], reverse=True)
                         results = top_pool
@@ -340,16 +287,15 @@ class SearchService:
                             returned=len(results),
                             top_score=results[0]["score"] if results else None,
                         )
-                    except Exception as e:  # noqa: BLE001
+                    except Exception as e:  
                         logger.warning(
                             "Query-aware re-ranking failed; using trend order",
                             error=str(e),
                         )
                         results = enriched_results
-            except Exception as e:  # noqa: BLE001
+            except Exception as e: 
                 logger.warning("Snowflake fallback recommendations failed", error=str(e))
 
-        # Apply edition-date filtering against articles_raw.published_at.
         results = _filter_by_edition_date(results, edition_date, limit, db=db)
 
         return {
