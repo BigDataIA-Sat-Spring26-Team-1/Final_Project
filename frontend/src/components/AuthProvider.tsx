@@ -194,6 +194,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Incomplete profiles get pinned to /company/profile. Fail-closed on
   // errors so a transient outage can't let a half-onboarded tenant drift
   // into the briefs/drafts surfaces.
+  //
+  // For COMPANY role, `user.company_id` is the tenant id on `companies.id`
+  // that `/admin/companies/{id}` resolves against — `user.id` is just the
+  // person's account row and would 404 every time.
   useEffect(() => {
     const controller = new AbortController();
     (async () => {
@@ -201,8 +205,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setHasCompanyProfile(null);
         return;
       }
+      const companyId = user.company_id;
+      if (!companyId) {
+        // COMPANY account with no linked tenant row — nothing to gate on;
+        // treat as incomplete so the profile page can surface a helpful
+        // error rather than trapping the user silently.
+        setHasCompanyProfile(false);
+        return;
+      }
       try {
-        const profile = await getCompanyProfile(user.id, controller.signal);
+        const profile = await getCompanyProfile(companyId, controller.signal);
         if (controller.signal.aborted) return;
         setHasCompanyProfile(
           isCompanyProfileComplete(profile as unknown as Record<string, unknown>),
