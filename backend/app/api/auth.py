@@ -141,6 +141,19 @@ async def signup(
     payload: SignupRequest,
     db: SnowflakeConnection = Depends(get_db_connection),
 ) -> AuthEnvelope:
+    # B2C (USER) accounts are restricted to Gmail addresses because the
+    # newsletter delivery path uses Gmail SMTP and consumer inboxes on
+    # other providers (Outlook / Workspace) silently filter mail from our
+    # sender. Company tenants accept any email — they don't receive
+    # newsletters, only admins do.
+    if payload.role == "USER":
+        email_norm = (payload.email or "").strip().lower()
+        if not re.match(r"^[a-z0-9._%+-]+@gmail\.com$", email_norm):
+            raise HTTPException(
+                status_code=422,
+                detail="Reader accounts must use a Gmail address (@gmail.com).",
+            )
+
     cur = db.cursor()
     cur.execute("SELECT id FROM users WHERE email = %s", (payload.email,))
     if cur.fetchone():

@@ -2,8 +2,14 @@ from __future__ import annotations
 import asyncio
 import html as html_lib
 import re
+import smtplib
+import ssl
 from datetime import date as _date
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from typing import Any, Dict, List, Optional
+from uuid import uuid4
+
 from snowflake.connector import SnowflakeConnection
 from app.core.config import get_settings
 from app.core.logging_conf import get_logger
@@ -572,7 +578,7 @@ async def send_newsletter_email(
     existing = _check_existing_delivery(db, user_id, target_date)
     if existing:
         logger.info(
-            "Newsletter already delivered — skipping MailerSend call",
+            "Newsletter already delivered — skipping SMTP dispatch",
             user_id=user_id,
             edition_date=target_date,
         )
@@ -586,13 +592,13 @@ async def send_newsletter_email(
             "message_id": existing.get("message_id"),
         }
 
-    if not settings.mailersend_api_key:
+    if not settings.smtp_username or not settings.smtp_password:
         return {
             "status": "MAILER_DISABLED",
             "user_id": user_id,
             "edition_date": target_date,
             "already_sent": False,
-            "detail": "MAILERSEND_API_KEY not configured.",
+            "detail": "SMTP credentials not configured.",
         }
 
     # Prefer the stored locked copy so the email matches exactly what the
@@ -616,7 +622,7 @@ async def send_newsletter_email(
     if "text" not in rendered or not rendered.get("text"):
         rendered["text"] = rendered["html"]
 
-    recipient = _resolve_recipient(user, settings.mailersend_test_recipient)
+    recipient = _resolve_recipient(user, settings.smtp_test_recipient)
     if not recipient:
         return {
             "status": "NO_RECIPIENT",
@@ -627,25 +633,38 @@ async def send_newsletter_email(
         }
 
     subject = f"CurateAI — Daily Briefing · {target_date}"
+    from_email = settings.smtp_from_email or settings.smtp_username
+    from_name = settings.smtp_from_name or "CurateAI Newsletter"
+    # Stable message-id so bounce/DSN paths can correlate; also surfaces
+    # as the `delivery_message_id` column so ops can trace a row.
+    message_id = f"<{uuid4().hex}@curateai.local>"
 
-    def _blocking_send() -> Dict[str, Any]:
-        from mailersend import MailerSendClient, EmailBuilder  
+    def _blocking_send() -> None:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = f"{from_name} <{from_email}>"
+        msg["To"] = recipient["email"]
+        msg["Message-ID"] = message_id
+        msg.attach(MIMEText(rendered["text"] or rendered["html"], "plain"))
+        msg.attach(MIMEText(rendered["html"], "html"))
 
-        client = MailerSendClient(api_key=settings.mailersend_api_key)
-        email = (
-            EmailBuilder()
-            .from_email(settings.mailersend_from_email, settings.mailersend_from_name)
-            .to_many([recipient])
-            .subject(subject)
-            .html(rendered["html"])
-            .text(rendered["text"])
-            .build()
-        )
-        return client.emails.send(email)
+        # macOS system Python can lack a CA bundle wired into stdlib ssl;
+        # certifi is a transitive dep via requests so it's always present.
+        try:
+            import certifi
+            context = ssl.create_default_context(cafile=certifi.where())
+        except ModuleNotFoundError:
+            context = ssl.create_default_context()
+
+        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30) as s:
+            s.ehlo()
+            s.starttls(context=context)
+            s.ehlo()
+            s.login(settings.smtp_username, settings.smtp_password)
+            s.sendmail(from_email, [recipient["email"]], msg.as_string())
 
     try:
-        response = await asyncio.to_thread(_blocking_send)
-        message_id = getattr(response, "message_id", None) or getattr(response, "id", None)
+        await asyncio.to_thread(_blocking_send)
         sent_at = _record_delivery(
             db,
             user_id,
@@ -675,7 +694,7 @@ async def send_newsletter_email(
         }
     except Exception as exc:  
         logger.error(
-            "MailerSend dispatch failed",
+            "SMTP dispatch failed",
             user_id=user_id,
             edition_date=target_date,
             error=str(exc),
