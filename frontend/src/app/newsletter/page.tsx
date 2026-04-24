@@ -73,16 +73,20 @@ export default function NewsletterPage() {
     const controller = new AbortController();
     (async () => {
       try {
-        const res = await getNewsletterAvailableDates(userId, 30, controller.signal);
-        const today = todayIso();
-        const merged = res.dates.includes(today) ? res.dates : [today, ...res.dates];
-        setAvailableDates(merged);
+        const res = await getNewsletterAvailableDates(userId, 5, controller.signal);
+        // Only surface dates the API actually returned; do not inject
+        // today unless the backend says today exists. An empty list is a
+        // valid state for a brand-new user who has no generated editions.
+        setAvailableDates(res.dates);
       } catch (err) {
         if ((err as Error).name === 'AbortError') return;
       }
     })();
     return () => controller.abort();
-  }, [userId]);
+    // Re-fetch whenever a preview successfully lands — a fresh render
+    // for today will have just persisted a new row, so today should
+    // now show up in the dropdown.
+  }, [userId, preview?.edition_date]);
 
   // Inject the email HTML into an iframe so its inline styles don't bleed
   // into the site's dark chrome (and vice versa).

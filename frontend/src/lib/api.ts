@@ -515,7 +515,7 @@ export interface NewsletterAvailableDatesResponse {
 
 export function getNewsletterAvailableDates(
   userId: string,
-  limit = 30,
+  limit = 5,
   signal?: AbortSignal,
 ): Promise<NewsletterAvailableDatesResponse> {
   return request<NewsletterAvailableDatesResponse>('/api/v1/newsletter/available-dates', {

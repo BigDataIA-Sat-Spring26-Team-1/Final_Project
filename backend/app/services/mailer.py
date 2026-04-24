@@ -80,6 +80,10 @@ def _load_common_highlights(
             }
             for r in rows
         ]
+    # Fallback — no clusters were ingested on the exact edition_date. Still
+    # cap to clusters created on or before that date so historical editions
+    # never surface future-dated content (the 04-22 hero showing 04-24
+    # "Mounting tar" bug).
     cur.execute(
         """
         SELECT c.id, c.primary_title, c.primary_summary, c.trend_status,
@@ -95,10 +99,11 @@ def _load_common_highlights(
             WHERE cluster_id IS NOT NULL AND url IS NOT NULL AND url <> ''
         ) a ON a.cluster_id = c.id AND a.rn = 1
         WHERE c.final_trend_score IS NOT NULL
+          AND CAST(c.created_at AS DATE) <= %s
         ORDER BY c.created_at DESC, c.final_trend_score DESC NULLS LAST
         LIMIT %s
         """,
-        (limit,),
+        (edition_date, limit),
     )
     return [
         {
@@ -341,6 +346,92 @@ def _resolve_recipient(
         return None
     return {"email": email, "name": user.get("full_name") or email}
 
+def _load_stored_html(
+    db: SnowflakeConnection, user_id: str, edition_date: str
+) -> Optional[str]:
+    cur = db.cursor()
+    cur.execute(
+        """
+        SELECT final_content, draft_content
+        FROM newsletters
+        WHERE user_id = %s AND edition_date = %s
+        ORDER BY generated_at DESC NULLS LAST, created_at DESC
+        LIMIT 1
+        """,
+        (user_id, edition_date),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    html = (row[0] or row[1] or "").strip()
+    return html or None
+
+
+def _persist_rendered_html(
+    db: SnowflakeConnection, user_id: str, edition_date: str, html: str
+) -> None:
+    """Idempotent upsert of the templated HTML, keyed on (user_id,
+    edition_date). Used to lock today's newsletter after the first render
+    so multiple previews/logins see the same body."""
+    import uuid as _uuid
+    cur = db.cursor()
+    cur.execute(
+        """
+        MERGE INTO newsletters t
+        USING (SELECT %s AS user_id, %s AS edition_date) s
+        ON t.user_id = s.user_id AND t.edition_date = s.edition_date
+        WHEN MATCHED THEN UPDATE SET
+            final_content = %s,
+            draft_content = %s,
+            status = 'PUBLISHED',
+            generated_at = CURRENT_TIMESTAMP(),
+            updated_at = CURRENT_TIMESTAMP()
+        WHEN NOT MATCHED THEN INSERT
+            (id, user_id, edition_date, final_content, draft_content,
+             status, generated_at)
+        VALUES (%s, s.user_id, s.edition_date, %s, %s, 'PUBLISHED',
+                CURRENT_TIMESTAMP())
+        """,
+        (user_id, edition_date, html, html, str(_uuid.uuid4()), html, html),
+    )
+    db.commit()
+
+
+async def get_or_render_newsletter_html(
+    user_id: str, edition_date: str, db: SnowflakeConnection
+) -> Optional[Dict[str, Any]]:
+    """Serve the stored newsletter HTML if one exists for
+    (user_id, edition_date); otherwise render fresh via the templated
+    mailer path AND persist it so subsequent calls are stable.
+
+    Past editions without a stored row return None — we never retro-render
+    history since the underlying article pool has drifted.
+    """
+    stored = _load_stored_html(db, user_id, edition_date)
+    if stored:
+        user = _load_user_context(db, user_id)
+        return {
+            "user": user,
+            "html": stored,
+            "text": stored,
+            "common_count": 0,
+            "personal_count": 0,
+            "cached": True,
+        }
+
+    today = _date.today().isoformat()
+    if edition_date != today:
+        return None
+
+    rendered = await render_personalized_html(user_id, edition_date, db)
+    if not rendered or not (rendered.get("html") or "").strip():
+        return None
+
+    _persist_rendered_html(db, user_id, edition_date, rendered["html"])
+    rendered["cached"] = False
+    return rendered
+
+
 def _check_existing_delivery(
     db: SnowflakeConnection, user_id: str, edition_date: str
 ) -> Optional[Dict[str, Any]]:
@@ -465,7 +556,9 @@ async def send_newsletter_email(
             "detail": "MAILERSEND_API_KEY not configured.",
         }
 
-    rendered = await render_personalized_html(user_id, target_date, db)
+    # Prefer the stored locked copy so the email matches exactly what the
+    # user saw in the preview. Only render fresh if there's no stored row.
+    rendered = await get_or_render_newsletter_html(user_id, target_date, db)
     if not rendered:
         return {
             "status": "USER_NOT_FOUND",
@@ -473,7 +566,16 @@ async def send_newsletter_email(
             "edition_date": target_date,
             "already_sent": False,
         }
-    user = rendered["user"]
+    user = rendered.get("user") or _load_user_context(db, user_id)
+    if not user:
+        return {
+            "status": "USER_NOT_FOUND",
+            "user_id": user_id,
+            "edition_date": target_date,
+            "already_sent": False,
+        }
+    if "text" not in rendered or not rendered.get("text"):
+        rendered["text"] = rendered["html"]
 
     recipient = _resolve_recipient(user, settings.mailersend_test_recipient)
     if not recipient:
