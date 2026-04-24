@@ -525,6 +525,38 @@ export function getNewsletterAvailableDates(
   });
 }
 
+export interface AvailableBriefDatesResponse {
+  company_id: string;
+  dates: string[];
+}
+
+export function getAvailableBriefDates(
+  companyId: string,
+  limit = 5,
+  signal?: AbortSignal,
+): Promise<AvailableBriefDatesResponse> {
+  return request<AvailableBriefDatesResponse>('/api/v1/b2b/available-brief-dates', {
+    method: 'GET',
+    query: { company_id: companyId, limit },
+    signal,
+  });
+}
+
+export interface AvailableVelocityDatesResponse {
+  dates: string[];
+}
+
+export function getAvailableVelocityDates(
+  limit = 5,
+  signal?: AbortSignal,
+): Promise<AvailableVelocityDatesResponse> {
+  return request<AvailableVelocityDatesResponse>('/api/v1/b2b/available-velocity-dates', {
+    method: 'GET',
+    query: { limit },
+    signal,
+  });
+}
+
 export function previewNewsletterEmail(
   userId: string,
   editionDate?: string,

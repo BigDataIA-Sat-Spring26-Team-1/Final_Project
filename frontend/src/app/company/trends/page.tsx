@@ -17,6 +17,7 @@ import { PageWrapper } from '@/components/PageWrapper';
 import { Spinner } from '@/components/Spinner';
 import {
   ApiError,
+  getAvailableVelocityDates,
   getKeywordVelocity,
   type KeywordVelocityResponse,
   type KeywordVelocityRow,
@@ -31,10 +32,33 @@ function yesterdayIso(): string {
 
 export default function KeywordVelocityPage() {
   const [date, setDate] = useState<string>(yesterdayIso());
+  const [availableDates, setAvailableDates] = useState<string[]>([]);
   const [filter, setFilter] = useState('');
   const [data, setData] = useState<KeywordVelocityResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Fetch the dropdown's options on mount — only dates with enough
+  // articles to produce a non-empty NER pass are offered, same pattern
+  // as the B2C newsletter page.
+  useEffect(() => {
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const res = await getAvailableVelocityDates(5, controller.signal);
+        if (controller.signal.aborted) return;
+        setAvailableDates(res.dates);
+        // If the seeded default (yesterday) isn't in the list, jump to
+        // the most recent date that actually has data.
+        if (res.dates.length && !res.dates.includes(yesterdayIso())) {
+          setDate(res.dates[0]);
+        }
+      } catch (err) {
+        if ((err as Error).name === 'AbortError') return;
+      }
+    })();
+    return () => controller.abort();
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -92,13 +116,23 @@ export default function KeywordVelocityPage() {
           <div className="flex items-center gap-3 flex-wrap">
             <div className="flex items-center glass rounded-xl px-4 py-2 border border-white/5 focus-within:border-primary/40">
               <Calendar className="w-4 h-4 text-dim mr-2" />
-              <input
-                type="date"
+              <select
                 value={date}
-                max={yesterdayIso()}
                 onChange={(e) => setDate(e.target.value)}
-                className="bg-transparent border-none outline-none text-sm placeholder:text-dim"
-              />
+                className="bg-transparent border-none outline-none text-sm text-white [&>option]:bg-slate-900"
+                title="Only dates with enough ingested articles to run NER appear here."
+                disabled={availableDates.length === 0}
+              >
+                {availableDates.length === 0 ? (
+                  <option value={date}>{date}</option>
+                ) : (
+                  availableDates.map((d) => (
+                    <option key={d} value={d}>
+                      {d}
+                    </option>
+                  ))
+                )}
+              </select>
             </div>
             <div className="flex items-center glass rounded-xl px-4 py-2 border border-white/5 focus-within:border-primary/40">
               <Search className="w-4 h-4 text-dim mr-2" />

@@ -21,11 +21,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { CompanySwitcher } from '@/components/CompanySwitcher';
 import { PageWrapper } from '@/components/PageWrapper';
 import { Spinner } from '@/components/Spinner';
+import { StrategicBriefCard } from '@/components/StrategicBriefCard';
 import { UserSwitcher } from '@/components/UserSwitcher';
 import {
   ApiError,
+  getAvailableBriefDates,
   getBriefArchive,
   getNewsletterArchive,
+  getNewsletterAvailableDates,
   sendNewsletterEmail,
   sendNewslettersBatch,
   type BriefArchiveItem,
@@ -126,9 +129,19 @@ function B2CArchive() {
     setItems([]);
     setSelected(null);
     try {
+      // Filter to the last 5 real editions, same as /user/newsletter so
+      // admins don't see empty placeholder dates from the archive table.
+      const avail = await getNewsletterAvailableDates(id, 5, signal);
+      if (avail.dates.length === 0) {
+        setItems([]);
+        setSelected(null);
+        return;
+      }
       const res = await getNewsletterArchive(id, undefined, 50, signal);
-      setItems(res.results);
-      setSelected(res.results[0] ?? null);
+      const allowed = new Set(avail.dates);
+      const trimmed = res.results.filter((n) => allowed.has(n.edition_date));
+      setItems(trimmed);
+      setSelected(trimmed[0] ?? null);
     } catch (err) {
       if ((err as Error).name === 'AbortError') return;
       setError(
@@ -365,9 +378,17 @@ function B2BArchive() {
     setItems([]);
     setSelected(null);
     try {
+      const avail = await getAvailableBriefDates(id, 5, signal);
+      if (avail.dates.length === 0) {
+        setItems([]);
+        setSelected(null);
+        return;
+      }
       const res = await getBriefArchive(id, undefined, 50, signal);
-      setItems(res.results);
-      setSelected(res.results[0] ?? null);
+      const allowed = new Set(avail.dates);
+      const trimmed = res.results.filter((b) => allowed.has(b.brief_date));
+      setItems(trimmed);
+      setSelected(trimmed[0] ?? null);
     } catch (err) {
       if ((err as Error).name === 'AbortError') return;
       setError(
@@ -450,6 +471,16 @@ function B2BArchive() {
                 <FileText className="w-12 h-12 mb-4" />
                 <p>Pick a brief on the left.</p>
               </div>
+            ) : selected.structured_brief?.brief ? (
+              // Render the structured envelope through the same card the
+              // company-facing surface uses so admins review in the same
+              // layout (Blue Ocean angle, editorial titles, keyword
+              // velocity, detailed structure, internal linking, references).
+              <StrategicBriefCard
+                envelope={selected.structured_brief}
+                briefDate={selected.brief_date}
+                briefId={selected.id}
+              />
             ) : selected.brief_content ? (
               <pre className="whitespace-pre-wrap text-sm leading-relaxed text-white/90 font-mono bg-white/[0.02] rounded-2xl border border-white/10 p-6 max-h-[70vh] overflow-auto">
                 {selected.brief_content}

@@ -26,6 +26,7 @@ class AgentState(TypedDict, total=False):
     execution_mode: str
     user_persona: Dict[str, Any]
     edition_date: str
+    brief_date: str
 
     search_query: str
     retrieved_articles: List[Dict[str, Any]]
