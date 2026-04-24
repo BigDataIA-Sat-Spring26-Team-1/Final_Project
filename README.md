@@ -16,6 +16,65 @@
 
 ---
 
+## 🏛 Architecture Diagram
+
+![CurateAI Architecture](docs/CurateAI_ArchitectureDiagram.jpg)
+
+> Ingestion (RSS / ArXiv / HN) → dedup (URL + semantic) → cluster → trend-rank → two parallel LangGraph agents (B2C newsletter / B2B brief) → Gmail SMTP + Next.js UI. Snowflake is the system of record; Qdrant stores the 1,536-dim embeddings; Airflow runs the nightly pipeline on a GCE VM. The Claude Desktop MCP surface mounts the same FastAPI service.
+
+---
+
+## 🔗 Quick Links
+
+| Resource | Link |
+| :--- | :--- |
+| **Live frontend** | https://curateai-frontend-sjhg7huf4q-uc.a.run.app |
+| **Live backend API** | https://curateai-backend-sjhg7huf4q-uc.a.run.app |
+| **API docs (Swagger)** | https://curateai-backend-sjhg7huf4q-uc.a.run.app/docs |
+| **Airflow UI** | http://34.16.38.157:8080 |
+| **Codelabs walkthrough** | _TBD — paste the Codelabs URL here_ |
+| **Demo video** | _TBD — paste the video recording URL here_ |
+| **Architecture diagram (source)** | [`docs/CurateAI_ArchitectureDiagram.drawio`](docs/CurateAI_ArchitectureDiagram.drawio) |
+
+---
+
+## ▶️ Using the Application
+
+### For a B2C reader
+1. Open the live frontend and hit **Sign up**, pick the **Reader** role. Readers must use a `@gmail.com` address — newsletter delivery rides on Gmail SMTP and non-Gmail inboxes get filtered.
+2. First login forces you to `/user/onboarding`. Drop a LinkedIn-exported PDF (or a resume) onto the drop zone, click **Run Extraction**, then **Continue to My Feed**. This writes a 10-category weight vector to `user_personas`.
+3. **My Feed** shows your personalized top 10 articles plus a Global Highlights tab with the top trending cluster list. Use the 👍 / 👎 / 🚫 buttons to drift your behavioral weights — the change takes effect on the next ranking pass.
+4. **Newsletter** renders today's email in a sandboxed iframe. Click **Send to My Inbox** to dispatch via Gmail SMTP. The dropdown lists the last five dates that actually have a newsletter (no empty placeholders).
+5. **My Persona** surfaces explicit vs behavioural weight columns; **Update Interests** toggles the category chips into edit mode and saves the bio + picks back to Snowflake.
+
+### For a B2B tenant
+1. Sign up with the **Company** role. Any email works — company admins don't receive newsletters.
+2. You're pinned to `/company/profile` until all ten required fields (`name, domain, industry, description, company_size, target_audience, key_products, content_pillars, competitors, tone_of_voice`) are filled. Saving triggers an affinity re-extract and releases the gate.
+3. **Strategic Drafts** (`/company/drafts`) auto-loads today's brief from the archive. If none exists, hit **Generate Today's Brief** — the LangGraph agent (intel_extract → brief_build → render_markdown) runs live, persists the structured output, and the page re-renders the card (Blue Ocean angle, editorial titles, keyword velocity, detailed structure, references). **Regenerate** (🔁) forces a fresh run for the same date.
+4. **Keyword Velocity** (`/company/trends`) shows SpaCy NER-discovered entities with 24-hour mention deltas. The date dropdown only lists days that have ≥ 5 ingested articles.
+
+### For an admin
+1. The seed admin credentials live in Secret Manager (`admin@curate.ai`). After login the left nav exposes **Admin Console**, **Global Trends**, **Global Archive**, **All Users**, **All Companies**.
+2. **Admin Console** is now read-only — it surfaces aggregate counts (B2C readers, B2B tenants, newsletters generated / sent, briefs, ranked clusters, article ingestion funnel). User + company creation moved to the public signup flow.
+3. **Global Archive** lets you view any user's newsletter or any company's strategic brief through the same structured card the tenant sees, and dispatch batch newsletter sends.
+4. **Global Trends** shares the SpaCy NER keyword-velocity view with the company console — single source of truth.
+
+### For a developer
+```bash
+# 1. Clone + boot the stack
+cp .env.example .env          # fill in Snowflake + OpenAI + SMTP creds
+docker compose -f docker-compose.yaml up -d      # Qdrant local
+cd backend && uv sync --extra test && uv run uvicorn app.main:app --port 8000 --reload
+cd ../frontend && npm install && npm run dev     # localhost:3000
+
+# 2. Trigger a pipeline run locally
+curl -X POST http://localhost:8000/api/v1/ingestion/fetch-rss
+curl -X POST http://localhost:8000/api/v1/deduplication/process
+curl -X POST http://localhost:8000/api/v1/trend/rank
+```
+
+---
+
 ## 🛠 Technology Stack & Core Dependencies
 
 | Layer | Technologies & Frameworks |
@@ -38,9 +97,11 @@
 
 ## 📚 Documentation & Resources
 
-- **Codelabs Guide**: [Detailed Step-by-Step Walkthrough](https://codelabs-preview.appspot.com/)
+- **Codelabs Guide**: _TBD — paste the Codelabs URL here_
+- **Demo Video**: _TBD — paste the video recording URL here_
 - **OpenAPI Docs**: [https://curateai-backend-sjhg7huf4q-uc.a.run.app/docs](https://curateai-backend-sjhg7huf4q-uc.a.run.app/docs)
 - **Airflow VM Runbook**: [`airflow/README.md`](airflow/README.md)
+- **Architecture Diagram (source)**: [`docs/CurateAI_ArchitectureDiagram.drawio`](docs/CurateAI_ArchitectureDiagram.drawio)
 
 ---
 
