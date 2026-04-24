@@ -5,19 +5,13 @@ import xml.etree.ElementTree as ET
 from dateutil import parser as date_parser
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta, timezone
-
 from app.core.sources import RSS_FEEDS
 from app.core.logging_conf import get_logger
 
 logger = get_logger("app.services.ingestion")
 
 class IngestionService:
-    """
-    Unified ingestion engine that aggregates content from RSS, ArXiv API, and HackerNews API.
-    Designed to scale to 3,000+ articles per daily run.
-    """
     
-    # ArXiv categories for high-volume technical discovery
     ARXIV_CATEGORIES = [
         "cs.AI", "cs.LG", "cs.CV", "cs.CL", "cs.NE", "cs.RO", "cs.DS", 
         "cs.SE", "cs.DB", "cs.IR", "cs.DC"
@@ -25,26 +19,14 @@ class IngestionService:
     
     @staticmethod
     def _get_yesterday_range() -> tuple[datetime, datetime]:
-        """Calculates the 26-hour ingestion window to prevent coverage gaps.
-
-        Returns:
-            tuple[datetime, datetime]: (start_time, end_time) as UTC aware objects.
-        """
         now = datetime.now(timezone.utc)
-        # 26h window provides 2 hours of overlap with previous runs
         start = now - timedelta(hours=26)
         return start, now
 
     @classmethod
     async def fetch_all_sources(cls) -> List[Dict[str, Any]]:
-        """Orchestrates all crawlers in parallel to maximize throughput.
-
-        Returns:
-            List[Dict]: Consolidated firehose of articles from all sources.
-        """
         logger.info("Starting multi-source ingestion firehose")
         
-        # Parallel execution of three different ingestion streams
         results = await asyncio.gather(
             cls.fetch_all_rss(),
             cls.fetch_arxiv_api(),
@@ -52,7 +34,6 @@ class IngestionService:
             return_exceptions=True
         )
         
-        # Unpack while filtering out potential task exceptions
         rss_articles = results[0] if not isinstance(results[0], Exception) else []
         arxiv_articles = results[1] if not isinstance(results[1], Exception) else []
         hn_articles = results[2] if not isinstance(results[2], Exception) else []
@@ -68,11 +49,6 @@ class IngestionService:
 
     @classmethod
     async def fetch_all_rss(cls) -> List[Dict[str, Any]]:
-        """Scrapes editorial RSS feeds defined in core/sources.py.
-
-        Returns:
-            List[Dict]: Filtered list of articles from editorial sources.
-        """
         start_time, end_time = cls._get_yesterday_range()
         semaphore = asyncio.Semaphore(5)
         
@@ -86,7 +62,6 @@ class IngestionService:
     async def _fetch_single_rss(cls, client: httpx.AsyncClient, url: str, 
                                 semaphore: asyncio.Semaphore, 
                                 start_time: datetime, end_time: datetime) -> List[Dict[str, Any]]:
-        """Worker to fetch and parse a single RSS feed."""
         async with semaphore:
             try:
                 resp = await client.get(url)
@@ -125,11 +100,6 @@ class IngestionService:
 
     @classmethod
     async def fetch_arxiv_api(cls) -> List[Dict[str, Any]]:
-        """Queries the ArXiv API for the latest research papers across technical categories.
-
-        Returns:
-            List[Dict]: Filtered list of new ArXiv submissions.
-        """
         start_time, end_time = cls._get_yesterday_range()
         articles = []
         
@@ -172,7 +142,7 @@ class IngestionService:
                                 cat_count += 1
                         logger.info("ArXiv category crawl complete", cat=cat, matched=cat_count)
                     
-                    await asyncio.sleep(1) # Respect ArXiv rate limits
+                    await asyncio.sleep(1) 
                 except Exception as e:
                     logger.error("ArXiv API failed", cat=cat, error=str(e))
                     
@@ -180,11 +150,6 @@ class IngestionService:
 
     @classmethod
     async def fetch_hn_api(cls, limit: int = 500) -> List[Dict[str, Any]]:
-        """Aggregates top stories from Hacker News.
-
-        Returns:
-            List[Dict]: Filtered list of HN stories within the timeframe.
-        """
         start_time, end_time = cls._get_yesterday_range()
         articles = []
         
@@ -208,7 +173,6 @@ class IngestionService:
     async def _fetch_hn_item(cls, client: httpx.AsyncClient, sid: int, 
                              semaphore: asyncio.Semaphore, 
                              start_time: datetime, end_time: datetime) -> Optional[Dict[str, Any]]:
-        """Worker to fetch metadata for a single HN story."""
         async with semaphore:
             try:
                 url = f"https://hacker-news.firebaseio.com/v0/item/{sid}.json"

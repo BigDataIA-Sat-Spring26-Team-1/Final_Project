@@ -1,7 +1,5 @@
 from typing import Dict, Any
-
 from langgraph.graph import END
-
 from app.core.logging_conf import get_logger
 from app.core.metrics import NEWSLETTER_REJECTIONS_TOTAL
 from app.db.snowflake import get_db_connection
@@ -18,10 +16,7 @@ logger = get_logger("app.services.b2c_agent")
 
 @track_node_latency
 async def initialize_state(state: AgentState) -> Dict[str, Any]:
-    """
-    Step 1: Set up the initial context.
-    Fetches the explicit and behavioral persona details from the DB.
-    """
+
     user_id = state.get("user_id")
     logger.info("Initializing B2C Agent State", user_id=user_id)
     
@@ -43,14 +38,11 @@ async def initialize_state(state: AgentState) -> Dict[str, Any]:
 
 @track_node_latency
 async def curate_content(state: AgentState) -> Dict[str, Any]:
-    """
-    Step 2: Hit the built-in SearchService to get articles matching the user's tags.
-    """
+
     user_id = state.get("user_id")
     edition_date = state.get("edition_date")
     logger.info("Curating content for newsletter", user_id=user_id, edition_date=edition_date)
 
-    # get_db_connection is a generator (yields), so we handle it manually here
     db_gen = get_db_connection()
     db = next(db_gen)
 
@@ -59,7 +51,6 @@ async def curate_content(state: AgentState) -> Dict[str, Any]:
             user_id, limit=3, db=db, edition_date=edition_date
         )
     finally:
-        # Close the connection by finishing the generator
         try:
             next(db_gen)
         except StopIteration:
@@ -68,7 +59,6 @@ async def curate_content(state: AgentState) -> Dict[str, Any]:
     if not recommendations:
         return {"status": "NO_ARTICLES_FOUND", "retrieved_articles": []}
         
-    # Format the payload returned from the Snowflake/Qdrant SearchService
     return {
         "retrieved_articles": recommendations.get("results", []), 
         "search_query": recommendations.get("semantic_basis", ""),
@@ -77,15 +67,11 @@ async def curate_content(state: AgentState) -> Dict[str, Any]:
 
 @track_node_latency
 async def generate_newsletter(state: AgentState) -> Dict[str, Any]:
-    """
-    Step 3: Take the retrieved articles and use the LLM to write a coherent briefing.
-    Dynamically adheres to the user persona fetched in Step 1.
-    """
+
     articles = state.get("retrieved_articles", [])
     if not articles:
         return {"generated_content": "No relevant news found today.", "status": "EMPTY_RESULT"}
 
-    # Dynamically extract persona parameters context
     user_persona = state.get("user_persona", {})
     job_title = user_persona.get("job_title", "General Technology Enthusiast")
     seniority = user_persona.get("seniority", "Mid-level")
@@ -117,9 +103,7 @@ async def generate_newsletter(state: AgentState) -> Dict[str, Any]:
 
 @track_node_latency
 async def editor_review(state: AgentState) -> Dict[str, Any]:
-    """
-    Step 4: Review the draft against the retrieved articles for hallucinations.
-    """
+
     draft = state.get("generated_content", "")
     articles = state.get("retrieved_articles", [])
     
@@ -154,7 +138,6 @@ async def editor_revise(state: AgentState) -> Dict[str, Any]:
     """
     draft = state.get("generated_content", "")
     
-    # Grab the last message (which automatically contains the Editor's feedback)
     messages = state.get("messages", [])
     rejection_notes = messages[-1]["content"] if messages else "Review notes missing."
     
@@ -177,56 +160,39 @@ async def editor_revise(state: AgentState) -> Dict[str, Any]:
     return {"generated_content": response, "status": "REVISED"}
 
 def route_execution_mode(state: AgentState) -> str:
-    """
-    Tasks 12 & 13: Splits graph execution.
-    Fast mode bypasses the editor straight to END.
-    Polished mode goes to editor_review.
-    """
+
     if state.get("execution_mode") == "fast":
         return "fast"
     return "polished"
 
 def review_condition(state: AgentState) -> str:
-    """
-    Determines if the graph should end or go to the revision node.
-    """
+ 
     if state.get("status") == "REVISION_NEEDED":
-        # Task 21: Record Rejection
         user_id = state.get("user_id", "anonymous")
         NEWSLETTER_REJECTIONS_TOTAL.labels(user_id=user_id).inc()
         return "revise"
     return "end"
 
 def get_b2c_newsletter_graph():
-    """
-    Builds the static LangGraph for B2C Newsletters.
-    Complete with fact-checking and revision loops.
-    """
+
     workflow = create_base_graph()
-    
-    # 1. Define Nodes
     workflow.add_node("init", initialize_state)
     workflow.add_node("curate", curate_content)
     workflow.add_node("write", generate_newsletter)
     workflow.add_node("editor_review", editor_review)
     workflow.add_node("editor_revise", editor_revise)
-    
-    # 2. Define Edges
     workflow.set_entry_point("init")
     workflow.add_edge("init", "curate")
     workflow.add_edge("curate", "write")
-    
-    # Tasks 12 & 13: Dynamically route execution based on speed
     workflow.add_conditional_edges(
         "write",
         route_execution_mode,
         {
-            "fast": END,                 # The Fast Mode Exit Bypass
-            "polished": "editor_review"  # The Polished Mode Safe Loop
+            "fast": END,                 
+            "polished": "editor_review"  
         }
     )
     
-    # Task 6: Add Conditional Branching
     workflow.add_conditional_edges(
         "editor_review",
         review_condition,
@@ -236,7 +202,6 @@ def get_b2c_newsletter_graph():
         }
     )
     
-    # After revision, go back for another review (Self-healing loop)
     workflow.add_edge("editor_revise", "editor_review")
     
     return workflow.compile()

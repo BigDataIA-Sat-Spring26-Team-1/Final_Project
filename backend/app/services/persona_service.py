@@ -3,7 +3,6 @@ import asyncio
 from typing import List
 from fastapi import UploadFile
 from snowflake.connector import SnowflakeConnection
-
 from app.core.schemas import (
     PersonaExtractionResult, 
     SinglePersonaExtractionResponse, 
@@ -18,10 +17,6 @@ from app.core.logging_conf import get_logger
 logger = get_logger("app.services.persona_orchestrator")
 
 class PersonaService:
-    """
-    Orchestration layer managing the end-to-end flow:
-    PDF Extraction -> LLM Analysis -> Snowflake Persistence.
-    """
 
     @classmethod
     async def process_batch(
@@ -34,7 +29,6 @@ class PersonaService:
         
         async def process_single(file: UploadFile) -> SinglePersonaExtractionResponse:
             try:
-                # 1. Size Validation (Industry Standard 5MB limit)
                 content = await file.read()
                 if len(content) > 5 * 1024 * 1024:
                     return SinglePersonaExtractionResponse(
@@ -44,10 +38,8 @@ class PersonaService:
                     )
                 await file.seek(0)
                 
-                # 2. Extract & Analyze
                 text, parse_lat = await DocumentParserService.extract_best_text(file)
                 
-                # Heuristic source detection
                 linkedin_markers = ["linkedin.com/", "Top Skills", "Education"]
                 doc_type = "LinkedIn PDF" if any(m.lower() in text.lower() for m in linkedin_markers) else "Resume"
                 
@@ -55,11 +47,9 @@ class PersonaService:
                 profile.extraction_latency_seconds += parse_lat
                 profile.source_type = doc_type
                 
-                # 3. Synchronous Push to Snowflake (At the end of successful extraction)
-                # We convert CategoryWeights model to raw dict for the repo
                 update_data = UserPersonaUpdate(
                     user_id=user_id,
-                    linkedin_url=None, # Only if we had a field for it, currently extracted name/title
+                    linkedin_url=None, 
                     job_title=profile.job_title,
                     seniority=profile.seniority,
                     persona_archetype=profile.persona_archetype,

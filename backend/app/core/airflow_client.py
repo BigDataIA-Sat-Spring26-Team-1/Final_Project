@@ -1,27 +1,12 @@
-"""Thin Airflow REST client.
-
-The backend used to run ingestion / deduplication / ranking inline. Those
-pipelines now live in Airflow DAGs on a GCP VM — the backend just fires them
-off via the stable REST API and returns a run handle so the caller can poll
-for status if they want to.
-
-Everything here reads from ``app.core.config.Settings`` so the same image runs
-locally (http://localhost:8080) and in production (the VM's internal IP) with
-zero code changes.
-"""
 from __future__ import annotations
-
 import time
 from typing import Any, Dict, Optional
-
 import httpx
-
 from app.core.config import get_settings
 from app.core.logging_conf import get_logger
 from app.core.metrics import DAG_TRIGGER_LATENCY, DAG_TRIGGERS_TOTAL
 
 logger = get_logger("app.core.airflow_client")
-
 
 class AirflowUnavailable(RuntimeError):
     """Raised when AIRFLOW_HOST is missing or the scheduler is unreachable.
@@ -29,7 +14,6 @@ class AirflowUnavailable(RuntimeError):
     The API layer catches this and turns it into a 503 — we don't want a
     Snowflake outage on the VM to look like a 500 from the backend.
     """
-
 
 def _require_host() -> str:
     host = get_settings().airflow_host.rstrip("/")
@@ -39,16 +23,10 @@ def _require_host() -> str:
         )
     return host
 
-
 async def trigger_dag(
     dag_id: str,
     conf: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Kick off a DAG run and return the run handle.
-
-    ``conf`` is forwarded to Airflow verbatim — DAGs read it via
-    ``dag_run.conf`` to parameterise per-user / per-company runs.
-    """
     settings = get_settings()
     host = _require_host()
     url = f"{host}/api/v1/dags/{dag_id}/dagRuns"
@@ -94,9 +72,7 @@ async def trigger_dag(
     )
     return data
 
-
 async def get_dag_run_status(dag_id: str, dag_run_id: str) -> Dict[str, Any]:
-    """Fetch the current state of a DAG run (queued / running / success / failed)."""
     settings = get_settings()
     host = _require_host()
     url = f"{host}/api/v1/dags/{dag_id}/dagRuns/{dag_run_id}"

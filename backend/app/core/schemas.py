@@ -82,10 +82,7 @@ class NewsletterResponse(NewsletterBase):
     created_at: datetime
     updated_at: datetime
 
-# --- Persona Extraction & Standardized Taxonomy Models ---
-
 class CategoryWeights(BaseModel):
-    """Explicit taxonomy weights required for strictly-typed LLM parsing."""
     llms: float = Field(description="Weight for LLMs (0.0 to 1.0)")
     ai_agents: float = Field(description="Weight for AI Agents (0.0 to 1.0)")
     computer_vision: float = Field(description="Weight for Computer Vision (0.0 to 1.0)")
@@ -97,12 +94,7 @@ class CategoryWeights(BaseModel):
     data_engineering: float = Field(description="Weight for Data Engineering (0.0 to 1.0)")
     startups: float = Field(description="Weight for Startups (0.0 to 1.0)")
 
-
 class CompanyContentAffinity(BaseModel):
-    """B2B mirror of CategoryWeights. Same 10-dim taxonomy; the distribution
-    describes where a tenant's content gravity sits. Populated per-company
-    by ``app.services.company_affinity.extract_company_affinity`` and
-    consumed as a hard constraint in the B2B Strategic Brief prompt."""
 
     llms: float = Field(ge=0.0, le=1.0)
     ai_agents: float = Field(ge=0.0, le=1.0)
@@ -116,7 +108,6 @@ class CompanyContentAffinity(BaseModel):
     startups: float = Field(ge=0.0, le=1.0)
 
 class PersonaExtractionResult(BaseModel):
-    """Output layout mapped securely from raw text via the LLM pipeline."""
     name: str = Field(description="Full name of the user.")
     job_title: str = Field(description="Current or most recent job title.")
     seniority: str = Field(description="Estimated seniority level: entry, mid, senior, lead, executive.")
@@ -128,25 +119,18 @@ class PersonaExtractionResult(BaseModel):
     source_type: str = Field(description="Inferred classification (e.g. LinkedIn PDF, Resume)")
     extraction_latency_seconds: float = Field(default=0.0)
 
-# --- Batch & Partial Success Models ---
-
 class SinglePersonaExtractionResponse(BaseModel):
-    """Result for a single file within a batch, allowing for graceful partial failures."""
     filename: str
     is_success: bool
     data: Optional[PersonaExtractionResult] = None
     error: Optional[str] = None
 
 class BatchPersonaResponse(BaseModel):
-    """Unified response for multi-file persona ingestion."""
     user_id: str
     results: List[SinglePersonaExtractionResponse]
     overall_latency_seconds: float
 
-# --- Persistence Models ---
-
 class UserPersonaUpdate(BaseModel):
-    """Input layout for the database layer specifically targeting the user_personas table."""
     user_id: str
     linkedin_url: Optional[str] = None
     job_title: Optional[str] = None
@@ -154,8 +138,6 @@ class UserPersonaUpdate(BaseModel):
     persona_archetype: Optional[str] = None
     bio_summary: Optional[str] = None
     explicit_category_weights: Dict[str, float]
-
-# --- Ingestion Models ---
 
 class RawArticleMetadata(BaseModel):
     source_name: str
@@ -175,22 +157,13 @@ class IngestionBatchResponse(BaseModel):
     end_time: str
     processing_time_seconds: float
 
-
 class DAGTriggerResponse(BaseModel):
-    """Shared response shape for every endpoint that fires an Airflow DAG.
 
-    The pipelines run async on the VM, so the backend only guarantees that the
-    run was accepted — callers can poll /admin/dag-runs/{dag_id}/{run_id} to
-    follow execution state.
-    """
     status: str = Field(description="ACCEPTED once the scheduler has the run.")
     message: str
     dag_id: str
     dag_run_id: str
     state: Optional[str] = Field(default=None, description="queued / running / success / failed.")
-
-
-# --- B2B Intelligence Report Models ---
 
 class B2BReportRequest(BaseModel):
     user_id: str = Field(..., description="Corporate client identifier.")
@@ -208,11 +181,6 @@ class B2BReportResponse(BaseModel):
     )
     urgency_tier: Optional[str] = None
 
-
-# --- Strategic Brief — structured LLM output --------------------------------
-# Matches the prototype card in Temp/SEO_Prototype/UI/index.html so the
-# frontend can render sections without additional parsing.
-
 class BriefKeyword(BaseModel):
     keyword: str = Field(..., description="Short keyword or phrase.")
     monthly_volume: Optional[int] = Field(
@@ -228,21 +196,17 @@ class BriefKeyword(BaseModel):
         description="SURGING / STABLE / DECLINING — only set when velocity is present.",
     )
 
-
 class BriefContentSection(BaseModel):
     step: int = Field(..., description="1-indexed ordering of the section.")
     title: str
     description: str
-
 
 class BriefReference(BaseModel):
     title: str
     url: str
     source_name: Optional[str] = None
 
-
 class StrategicBrief(BaseModel):
-    """Structured SEO strategic brief persisted in `content_briefs.structured_brief`."""
 
     opportunity_score: float = Field(..., description="0-100 opportunity score.")
     urgency_tier: str = Field(
@@ -276,12 +240,6 @@ class StrategicBrief(BaseModel):
 
 
 class StrategicBriefEnvelope(BaseModel):
-    """What gets persisted under `content_briefs.structured_brief`.
-
-    Combines the LLM's StrategicBrief with server-side attachments we don't
-    want the model to hallucinate (reference_sources come from articles_raw,
-    and keyword_velocity is pulled from the SpaCy NER pipeline).
-    """
 
     brief: StrategicBrief
     reference_sources: List[BriefReference] = Field(default_factory=list)
@@ -289,9 +247,6 @@ class StrategicBriefEnvelope(BaseModel):
         default_factory=dict,
         description="Subset of the company profile captured at generation time.",
     )
-
-
-# --- Behavioral Refinement Models ---
 
 class FeedbackType(str, Enum):
     like = "like"
@@ -310,7 +265,6 @@ class ArticleFeedbackResponse(BaseModel):
     user_id: str
     updated_categories: Dict[str, float]
     message: str
-# --- Newsletter Agent Models ---
 
 class B2CNewsletterRequest(BaseModel):
     user_id: str

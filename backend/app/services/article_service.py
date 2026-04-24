@@ -2,7 +2,6 @@ import time
 import asyncio
 from typing import Dict, Any
 from snowflake.connector import SnowflakeConnection
-
 from app.repository.article import ArticleRepository
 from app.services.llm_articles import ArticleIntelligenceService
 from app.core.logging_conf import get_logger
@@ -10,15 +9,9 @@ from app.core.logging_conf import get_logger
 logger = get_logger("app.services.article_orchestrator")
 
 class ArticleOrchestratorService:
-    """Manages the parallel classification of daily incoming articles.
-    
-    Designed to process raw articles in batches to avoid overwhelming LLM endpoints,
-    then updates their taxonomy weights in Snowflake.
-    """
 
     @classmethod
     async def classify_pending_articles(cls, db: SnowflakeConnection, batch_size: int = 10) -> Dict[str, Any]:
-        """Fetches pending articles and uses AI to map them into the taxonomy."""
         start_time = time.time()
         
         articles = ArticleRepository.get_unclassified_articles(db, limit=batch_size)
@@ -46,7 +39,6 @@ class ArticleOrchestratorService:
                 logger.error("Failed to classify article", article_id=article.get("id"), error=str(e))
                 return False
 
-        # Limit concurrency to respect external API rate limits
         semaphore = asyncio.Semaphore(5)
         
         async def sem_process(article):

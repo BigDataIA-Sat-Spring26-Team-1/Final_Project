@@ -1,32 +1,9 @@
-"""MailerSend-backed newsletter delivery.
-
-Two top-level entry points:
-
-* ``render_personalized_html`` — build a persona-specific HTML document for
-  the given ``(user_id, edition_date)``. The layout mirrors the Newsletter
-  Preview in ``Temp/SEO_Prototype/UI`` and combines:
-    - a ``Top Headline`` (the #1 trending cluster of the day)
-    - 19 more "Today's Deck" cards (the remaining top-20 trending clusters)
-    - the user's 10 personalized recommendations
-
-* ``send_newsletter_email`` — persists-and-sends. Idempotent per
-  ``(user_id, edition_date)`` via ``newsletters.sent_at``; a second call for
-  the same day returns ``already_sent=True`` without hitting MailerSend.
-
-Email generation is deliberately kept out of the LangGraph (the graph writes
-HTML tailored for the in-app preview). The email version uses the ranked
-pipeline snapshots directly so the mail always reflects today's fresh data,
-even if the in-app draft was generated yesterday in ``fast`` mode.
-"""
 from __future__ import annotations
-
 import asyncio
 import html as html_lib
 from datetime import date as _date
 from typing import Any, Dict, List, Optional
-
 from snowflake.connector import SnowflakeConnection
-
 from app.core.config import get_settings
 from app.core.logging_conf import get_logger
 from app.services.search import SearchService
@@ -35,9 +12,6 @@ logger = get_logger("app.services.mailer")
 
 COMMON_LIMIT = 20
 PERSONAL_LIMIT = 10
-
-
-# --- Data loaders ------------------------------------------------------------
 
 def _load_user_context(
     db: SnowflakeConnection, user_id: str
@@ -66,11 +40,9 @@ def _load_user_context(
         "bio_summary": row[6],
     }
 
-
 def _load_common_highlights(
     db: SnowflakeConnection, edition_date: str, limit: int = COMMON_LIMIT
 ) -> List[Dict[str, Any]]:
-    """Top-N ranked clusters for the edition with a representative URL."""
     cur = db.cursor()
     cur.execute(
         """
@@ -108,9 +80,6 @@ def _load_common_highlights(
             }
             for r in rows
         ]
-    # Fallback: no clusters pinned to the edition_date yet (common when the
-    # trend DAG hasn't run for today). Serve the most recent N instead so the
-    # email never ships empty.
     cur.execute(
         """
         SELECT c.id, c.primary_title, c.primary_summary, c.trend_status,
@@ -145,14 +114,12 @@ def _load_common_highlights(
         for r in cur.fetchall()
     ]
 
-
 async def _load_personalized(
     user_id: str,
     db: SnowflakeConnection,
     limit: int = PERSONAL_LIMIT,
     edition_date: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Delegate to the Search service so the picks match /user's feed."""
     payload = await SearchService.get_personalized_recommendations(
         user_id, limit, db, edition_date=edition_date
     )
@@ -160,17 +127,12 @@ async def _load_personalized(
         return []
     return payload.get("results", [])
 
-
-# --- HTML assembly -----------------------------------------------------------
-
 def _esc(text: Any) -> str:
     if text is None:
         return ""
     return html_lib.escape(str(text), quote=True)
 
-
 def _article_row_html(article: Dict[str, Any], accent: str) -> str:
-    """Render one article as a styled card (inline CSS for email clients)."""
     title = _esc(article.get("title") or "Untitled")
     summary = _esc((article.get("summary") or "")[:220])
     if summary and len(article.get("summary", "")) > 220:
@@ -211,7 +173,6 @@ def _article_row_html(article: Dict[str, Any], accent: str) -> str:
         + '</td></tr>'
     )
 
-
 def _hero_html(article: Dict[str, Any]) -> str:
     title = _esc(article.get("title") or "Headline of the day")
     summary = _esc((article.get("summary") or "")[:260])
@@ -235,7 +196,6 @@ def _hero_html(article: Dict[str, Any]) -> str:
         + (f'<div style="font-size:12px;color:#0f172a;opacity:0.7;margin-top:14px;font-weight:600;">{src}</div>' if src else "")
         + '</td></tr>'
     )
-
 
 def _render_html(
     user: Dict[str, Any],
@@ -315,7 +275,6 @@ def _render_html(
 </body>
 </html>"""
 
-
 def _plain_text_fallback(
     user: Dict[str, Any],
     edition_date: str,
@@ -336,18 +295,7 @@ def _plain_text_fallback(
     parts += [_line(a) for a in common]
     return "\n".join(parts)
 
-
-# --- Public API --------------------------------------------------------------
-
 def _rotate_by_date(items: List[Dict[str, Any]], edition_date: str) -> List[Dict[str, Any]]:
-    """Stable rotation so each past edition surfaces a different ordering.
-
-    Our ingestion sampling gives us a bounded pool of clusters/articles per
-    run. Without rotation the archive would show the same top-N in the same
-    order every day. We rotate the list by ``(today - edition_date).days``
-    which yields deterministic, distinct orderings per day while keeping the
-    full article set identical.
-    """
     if not items:
         return items
     try:
@@ -360,17 +308,14 @@ def _rotate_by_date(items: List[Dict[str, Any]], edition_date: str) -> List[Dict
     shift = offset % len(items)
     return items[shift:] + items[:shift]
 
-
 async def render_personalized_html(
     user_id: str, edition_date: str, db: SnowflakeConnection
 ) -> Optional[Dict[str, Any]]:
-    """Return the rendered HTML + text + resolved recipient address."""
     user = _load_user_context(db, user_id)
     if not user:
         return None
     common = _load_common_highlights(db, edition_date)
     personal = await _load_personalized(user_id, db, edition_date=edition_date)
-    # Rotate the ordering by date offset so archive views aren't identical.
     common = _rotate_by_date(common, edition_date)
     personal = _rotate_by_date(personal, edition_date)
     html = _render_html(user, edition_date, common, personal)
@@ -383,12 +328,9 @@ async def render_personalized_html(
         "personal_count": len(personal),
     }
 
-
 def _resolve_recipient(
     user: Dict[str, Any], test_recipient: str
 ) -> Optional[Dict[str, str]]:
-    # Safety rail for staging/testing: every send is redirected to a single
-    # mailbox. Production leaves `mailersend_test_recipient` empty.
     if test_recipient:
         return {
             "email": test_recipient,
@@ -398,7 +340,6 @@ def _resolve_recipient(
     if not email:
         return None
     return {"email": email, "name": user.get("full_name") or email}
-
 
 def _check_existing_delivery(
     db: SnowflakeConnection, user_id: str, edition_date: str
@@ -427,7 +368,6 @@ def _check_existing_delivery(
         "recipient": row[3],
     }
 
-
 def _record_delivery(
     db: SnowflakeConnection,
     user_id: str,
@@ -437,15 +377,7 @@ def _record_delivery(
     message_id: Optional[str],
     status: str,
 ) -> Optional[str]:
-    """Persist the delivery attempt.
 
-    Only a successful send stamps ``sent_at`` — that's the idempotency key
-    for "already delivered", so marking a failure with a timestamp would
-    silently prevent retries after fixing the underlying issue (e.g. an
-    unverified sender domain). FAILED rows still record the status +
-    recipient so the UI can surface the error without reattempting on every
-    page refresh.
-    """
     import uuid as _uuid
 
     cur = db.cursor()
@@ -499,13 +431,11 @@ def _record_delivery(
         return row[0].isoformat() if hasattr(row[0], "isoformat") else str(row[0])
     return None
 
-
 async def send_newsletter_email(
     user_id: str,
     edition_date: Optional[str],
     db: SnowflakeConnection,
 ) -> Dict[str, Any]:
-    """Dispatch the newsletter for one user; idempotent per day."""
     settings = get_settings()
     target_date = edition_date or _date.today().isoformat()
 
@@ -516,9 +446,6 @@ async def send_newsletter_email(
             user_id=user_id,
             edition_date=target_date,
         )
-        # Do NOT spread `existing` directly: `existing["status"]` is the row's
-        # internal delivery_status ("SENT") which would clobber the caller-
-        # facing "ALREADY_SENT" sentinel. Copy explicitly instead.
         return {
             "status": "ALREADY_SENT",
             "user_id": user_id,
@@ -560,10 +487,8 @@ async def send_newsletter_email(
 
     subject = f"CurateAI — Daily Briefing · {target_date}"
 
-    # Offload the MailerSend HTTP call to a worker thread so we don't block
-    # the async event loop on a synchronous SDK.
     def _blocking_send() -> Dict[str, Any]:
-        from mailersend import MailerSendClient, EmailBuilder  # local import keeps startup light
+        from mailersend import MailerSendClient, EmailBuilder  
 
         client = MailerSendClient(api_key=settings.mailersend_api_key)
         email = (
@@ -607,7 +532,7 @@ async def send_newsletter_email(
             "common_count": rendered["common_count"],
             "personal_count": rendered["personal_count"],
         }
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  
         logger.error(
             "MailerSend dispatch failed",
             user_id=user_id,
@@ -625,7 +550,7 @@ async def send_newsletter_email(
                 None,
                 "FAILED",
             )
-        except Exception:  # noqa: BLE001
+        except Exception: 
             pass
         return {
             "status": "FAILED",

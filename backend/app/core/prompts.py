@@ -9,10 +9,7 @@ ARCHETYPE_CATEGORIES = [
 ]
 
 def get_persona_extraction_prompt(source_type: str, text: str) -> str:
-    """
-    Constructs the prompt for extracting structured professional profiles.
-    Separated from logic to allow for easier iteration on instruction sets.
-    """
+   
     return f"""
     ARCHETYPE CLASSIFICATION:
     You must assign the user to EXACTLY ONE of these archetypes based on their primary output focus:
@@ -32,9 +29,7 @@ def get_persona_extraction_prompt(source_type: str, text: str) -> str:
     """
 
 def get_article_classification_prompt(title: str, summary: str, content: str) -> str:
-    """
-    Constructs the prompt for multi-label classification of news/technical articles.
-    """
+
     return f"""
     Analyze the following article and categorize it according to our core taxonomy.
     

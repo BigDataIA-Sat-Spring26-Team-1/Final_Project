@@ -6,28 +6,12 @@ from app.core.prompts import get_article_classification_prompt
 
 logger = get_logger("app.services.article_intelligence")
 
-
 class ArticleIntelligenceService(BaseLLMService):
-    """Classifies articles into a 10-category taxonomy using a hybrid approach.
-
-    First attempts fast keyword matching against known technical terms.
-    Falls back to an LLM call only when keywords are insufficient.
-    """
 
     @classmethod
     async def classify_article(cls, title: str, summary: str, content: str) -> CategoryWeights:
-        """Maps a single article to weighted taxonomy categories.
 
-        Args:
-            title: Article headline.
-            summary: Short description or RSS snippet.
-            content: Full extracted text (may be empty).
-
-        Returns:
-            CategoryWeights with a 0.0-1.0 score per category.
-        """
         try:
-            # Try keyword-based classification first (instant, no API cost)
             search_text = f"{title} {summary}"
             axiomatic_hits = get_axiomatic_weights(search_text)
 
@@ -37,7 +21,6 @@ class ArticleIntelligenceService(BaseLLMService):
                 full_weights.update(axiomatic_hits)
                 return CategoryWeights(**full_weights)
 
-            # No keyword match — use the LLM for deeper analysis
             logger.info("Using LLM classification", title=title[:50])
 
             article_content = (content or "")[:8000]
