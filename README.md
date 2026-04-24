@@ -32,8 +32,8 @@
 | **Live backend API** | https://curateai-backend-sjhg7huf4q-uc.a.run.app |
 | **API docs (Swagger)** | https://curateai-backend-sjhg7huf4q-uc.a.run.app/docs |
 | **Airflow UI** | http://34.16.38.157:8080 |
-| **Codelabs walkthrough** | _TBD — paste the Codelabs URL here_ |
-| **Demo video** | _TBD — paste the video recording URL here_ |
+| **Codelabs walkthrough** | https://codelabs-preview.appspot.com/?file_id=1cxQZ6qAfUbkUYV_-GNVNCc-VztusYKkoJR_l2EtWF3A#6 |
+| **Demo video** | https://drive.google.com/file/d/1h3sernoj0OIfryrK2B7yDrMIwv4WQUNs/view?usp=sharing |
 | **Architecture diagram (source)** | [`docs/CurateAI_ArchitectureDiagram.drawio`](docs/CurateAI_ArchitectureDiagram.drawio) |
 
 ---
@@ -42,7 +42,7 @@
 
 ### For a B2C reader
 1. Open the live frontend and hit **Sign up**, pick the **Reader** role. Readers must use a `@gmail.com` address — newsletter delivery rides on Gmail SMTP and non-Gmail inboxes get filtered.
-2. First login forces you to `/user/onboarding`. Drop a LinkedIn-exported PDF (or a resume) onto the drop zone, click **Run Extraction**, then **Continue to My Feed**. This writes a 10-category weight vector to `user_personas`.
+2. First login forces you to `/user/onboarding`. Drop a LinkedIn-exported PDF onto the drop zone, click **Run Extraction**, then **Continue to My Feed**. This writes a 10-category weight vector to `user_personas`.
 3. **My Feed** shows your personalized top 10 articles plus a Global Highlights tab with the top trending cluster list. Use the 👍 / 👎 / 🚫 buttons to drift your behavioral weights — the change takes effect on the next ranking pass.
 4. **Newsletter** renders today's email in a sandboxed iframe. Click **Send to My Inbox** to dispatch via Gmail SMTP. The dropdown lists the last five dates that actually have a newsletter (no empty placeholders).
 5. **My Persona** surfaces explicit vs behavioural weight columns; **Update Interests** toggles the category chips into edit mode and saves the bio + picks back to Snowflake.
@@ -821,11 +821,15 @@ We started on MailerSend's trial plan and hit a hard recipient allow-list ("MS42
 | Member | Contributions |
 | :--- | :--- |
 | **Aakash Belide** | Core data architecture (Snowflake schema, Qdrant setup, LiteLLM routing), FastAPI backend scaffolding, P1 cold-start persona extraction pipeline, LLM multi-label article classification, P3 retrieval router (`/search/recommendations`), Next.js frontend dashboard, Newsletter Review UI, Cloud Run + Cloud Build deployment pipeline, Codelabs documentation |
-| **Abhinav Kumar** | Airflow production pipeline (ingestion DAG, deduplication DAG, qdrant_sync DAG, b2c_personalization DAG, b2c_newsletter DAG), B2C LangGraph newsletter agent (writer → editor graph, fast/polished modes), MCP server (SSE transport, 7 tools), Airflow → FastAPI webhook integration, GitHub Actions CI/CD, Prometheus observability layer |
+| **Abhinav Kumar Piyush** | Airflow production pipeline (ingestion DAG, deduplication DAG, qdrant_sync DAG, b2c_personalization DAG, b2c_newsletter DAG), B2C LangGraph newsletter agent (writer → editor graph, fast/polished modes), MCP server (SSE transport, 7 tools), Airflow → FastAPI webhook integration, GitHub Actions CI/CD, Prometheus observability layer |
 | **Rahul Bothra** | B2B LangGraph strategic brief agent (intel_extract → brief_build → render_markdown), company affinity extractor (`company_affinity.py`), P4 behavioral refinement endpoint and weekly rollup DAG, B2B API endpoints and Dockerizing, backend unit/integration testing (38 unit tests + MCP e2e), final architecture diagrams and README |
 
 ---
 
-## 📜 License + Credits
+## 📜 Attestation
 
-Academic project — Northeastern University DAMG 7245 Spring 26 Team 1 (Aakash Belide, Abhinav Kumar, Rahul Bothra). LLMs via LiteLLM / OpenAI. Framework credits: FastAPI, Next.js, LangGraph, Apache Airflow, Snowflake, Qdrant.
+WE ATTEST THAT WE HAVEN'T USED ANY OTHER STUDENTS' WORK IN OUR ASSIGNMENT AND ABIDE BY THE POLICIES LISTED IN THE STUDENT HANDBOOK
+* Aakash Belide: 33.3%
+* Abhinav Kumar Piyush: 33.3%
+* Rahul Bothra: 33.3%
+* AI usage disclosure: We have used AI for testing some prototyping, boilerplate code generation, some documentation and testing. But we have manually reviewed and verified everything whenever AI has generated anything.
