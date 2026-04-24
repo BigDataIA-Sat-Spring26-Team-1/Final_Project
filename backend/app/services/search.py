@@ -43,7 +43,7 @@ def _filter_by_edition_date(
     edition_date: Optional[str],
     limit: int,
     db: Optional[SnowflakeConnection] = None,
-    window_days: int = 0,
+    window_days: int = 3,
 ) -> List[Dict[str, Any]]:
     if not edition_date or db is None:
         return results[:limit]
@@ -173,7 +173,11 @@ class SearchService:
         query_embeddings = await DeduplicationService.get_embeddings([search_query])
         query_vector = query_embeddings[0].tolist()
 
-        qdrant_limit = max(limit * 5, limit) if edition_date else limit
+        # Always oversample — title-dedup + date-filter both drop candidates,
+        # and without headroom the caller ends up with fewer articles than
+        # requested. 5× keeps the cost trivial while leaving room to return
+        # `limit` *distinct* articles after filtering.
+        qdrant_limit = max(limit * 5, limit)
         q_client = get_qdrant_client()
         response = q_client.query_points(
             collection_name="articles",
