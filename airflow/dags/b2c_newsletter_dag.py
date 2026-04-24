@@ -76,12 +76,11 @@ def resolve_users(**context):
 
 def generate_newsletters(**context):
     ensure_backend_on_path()
-    import json
     import uuid
     from datetime import date
 
     from app.db.snowflake import get_db_connection
-    from app.services.b2c_agent import get_b2c_newsletter_graph
+    from app.services.mailer import render_personalized_html
 
     ti = context["ti"]
     user_ids: List[str] = ti.xcom_pull(task_ids="resolve_users") or []
@@ -89,7 +88,11 @@ def generate_newsletters(**context):
         log.warning("No users to process.")
         return {"attempted": 0, "succeeded": 0, "failures": []}
 
-    graph = get_b2c_newsletter_graph()
+    # Use the same templated renderer as the /newsletter/preview endpoint
+    # so the stored archive HTML is visually identical to what the user
+    # would see on-demand (and what the send/email path produces). Before
+    # this, the DAG used the b2c_agent LLM writer, which emitted raw
+    # unstyled HTML — the archive looked nothing like the preview.
     loop = asyncio.new_event_loop()
     db_gen = get_db_connection()
     db = next(db_gen)
@@ -101,23 +104,18 @@ def generate_newsletters(**context):
         cur = db.cursor()
         for uid in user_ids:
             try:
-                if hasattr(graph, "ainvoke"):
-                    state = loop.run_until_complete(
-                        graph.ainvoke({"user_id": uid, "execution_mode": "polished"})
-                    )
-                else:
-                    state = graph.invoke({"user_id": uid, "execution_mode": "polished"})
+                rendered = loop.run_until_complete(
+                    render_personalized_html(uid, today, db)
+                )
+                if not rendered:
+                    raise RuntimeError("Renderer returned no user context.")
+                html = (rendered.get("html") or "").strip()
+                if not html:
+                    raise RuntimeError("Renderer returned empty HTML.")
 
-                content = (state or {}).get("generated_content") or ""
-                if not content.strip():
-                    raise RuntimeError("Agent returned empty newsletter.")
-
-                # Track the path so ops can see which nodes the graph actually
-                # traversed per user — useful for debugging fast vs polished
-                # divergence during the demo.
-                path = (state or {}).get("execution_path_taken") or []
-                if isinstance(path, list):
-                    path = ",".join(path)[:500]
+                path = "mailer.render_personalized_html"
+                personal_ct = rendered.get("personal_count", 0)
+                common_ct = rendered.get("common_count", 0)
 
                 # Upsert keyed on (user_id, edition_date) so re-runs don't
                 # duplicate — one newsletter per user per day.
@@ -142,17 +140,21 @@ def generate_newsletters(**context):
                     (
                         uid,
                         today,
-                        content,
-                        content,
+                        html,
+                        html,
                         path,
                         str(uuid.uuid4()),
-                        content,
-                        content,
+                        html,
+                        html,
                         path,
                     ),
                 )
                 db.commit()
                 succeeded += 1
+                log.info(
+                    "Rendered newsletter user=%s personal=%d common=%d",
+                    uid, personal_ct, common_ct,
+                )
             except Exception as exc:
                 log.error("Newsletter generation failed for user_id=%s: %s", uid, exc)
                 failures.append({"user_id": uid, "error": str(exc)[:250]})
