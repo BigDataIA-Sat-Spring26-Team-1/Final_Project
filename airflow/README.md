@@ -127,3 +127,6 @@ Follow the run in the Airflow UI at `http://<vm-ip>:8080` (`admin` / the passwor
 * **`503` from the backend**: `AIRFLOW_HOST` is blank or unreachable. `curl http://<vm-ip>:8080/health` from a shell with the same network path.
 * **DAG import errors**: the scheduler mounts `backend/` read-only at `/opt/airflow/backend`. If a DAG raises `ModuleNotFoundError: app.services`, make sure `CURATEAI_BACKEND_PATH` matches the mount (the default is already correct).
 * **Snowflake connection refused**: the VM needs an egress IP on Snowflake's allowlist; check `SNOWFLAKE_ACCOUNT` in `.env`.
+
+
+## just a statement, nothing to see here
